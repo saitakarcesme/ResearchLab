@@ -109,27 +109,42 @@ def test_article_leads_with_a_plain_recommendation_and_measured_gain() -> None:
 
     markdown = generate_article_markdown(research, experiments, logs)
 
-    assert markdown.startswith("Use the accepted configuration from experiment 4.")
+    assert markdown.startswith(
+        "If I were setting this up, I would start with the configuration saved after "
+        "experiment **4**."
+    )
     assert not markdown.startswith("#")
     assert "validation bits per byte" in markdown
-    assert "Lower prediction loss is better" in markdown
+    assert "Think of it as how surprised the model is" in markdown
     assert markdown.count("val_bpb") == 1
-    assert "best recorded prediction loss" in markdown
+    assert "practical takeaway is simple" in markdown
+    assert "model became less uncertain" in markdown
     assert "1.275720" in markdown
     assert "1.113376" in markdown
     assert "0.162344" in markdown
     assert "12.73%" in markdown
-    assert "experiment 4" in markdown
+    assert "experiment **4**" in markdown
     assert "`best-commit`" in markdown
-    assert "Total batch size: `2**16`" in markdown
-    assert "Short-attention window: `96` tokens for the first seven layers" in markdown
+    assert (
+        "**Training scale and schedule:** Set total batch size to `2**16`" in markdown
+    )
+    assert "how much training data is combined before each optimizer update" in markdown
+    assert (
+        "**Context and targets:** Set short-attention window to `96` tokens for the "
+        "first seven layers" in markdown
+    )
+    assert "how much nearby text the early layers inspect" in markdown
     assert "`2,048`-token full context" in markdown
     assert "128-token windows" not in markdown
     assert "88-token windows" not in markdown
-    assert "experiment 6 tested adam betas `(0.9, 0.95)`" in markdown.lower()
-    assert "Experiment 5" in markdown
+    assert "Skip adam betas `(0.9, 0.95)`" in markdown
+    assert "experiment **5**" in markdown
     assert "56 candidate-generation attempts" in markdown
     assert markdown.lower().count("codex timed out") == 1
+    assert "## The setup I would copy" in markdown
+    assert "## Why I would trust this result" in markdown
+    assert "## What I would leave out" in markdown
+    assert "In experiment 2, this step lowered" not in markdown
     assert "What we tried, one run at a time" not in markdown
     assert "state of the art" not in markdown.lower()
 
@@ -172,12 +187,12 @@ def test_article_collapses_unmeasured_failures_without_treating_them_as_evidence
 
     markdown = generate_article_markdown(research, experiments, logs)
 
-    assert "not enough measured evidence" in markdown
+    assert "not have enough measured evidence" in markdown
     assert (
         "3 experiments did not produce a complete terminal metric summary" in markdown
     )
     assert "expected exactly one full terminal summary block" not in markdown
-    assert "## What did not help" not in markdown
+    assert "## What I would leave out" not in markdown
     assert "not available" not in markdown
 
 
@@ -212,11 +227,11 @@ def test_article_does_not_present_the_baseline_as_an_improvement() -> None:
 
     markdown = generate_article_markdown(research, experiments, logs)
 
-    assert "Keep the baseline as the reference for now" in markdown
-    assert "no persisted change has beaten it" in markdown
-    assert "## Recommended configuration" not in markdown
+    assert "The honest answer is to keep the baseline for now" in markdown
+    assert "none of the completed, persisted changes beat it" in markdown
+    assert "## The setup I would copy" not in markdown
     assert "could not start because the `uv` runtime was unavailable" in markdown
-    assert "fell by" not in markdown
+    assert "Across this run" not in markdown
 
 
 def test_article_handles_a_higher_is_better_metric_without_inverting_the_gain() -> None:
@@ -254,8 +269,11 @@ def test_article_handles_a_higher_is_better_metric_without_inverting_the_gain() 
 
     markdown = generate_article_markdown(research, experiments, [])
 
-    assert "the score rose by **0.100000**, or **20.00%**" in markdown
-    assert "higher is better" in markdown.lower()
+    assert (
+        "It raised `accuracy` from **0.500000** to **0.600000** by "
+        "**0.100000** (**20.00%**)" in markdown
+    )
+    assert "higher as better" in markdown.lower()
 
 
 def test_article_keeps_the_changed_setting_despite_boilerplate_mentions() -> None:
@@ -306,5 +324,10 @@ def test_article_keeps_the_changed_setting_despite_boilerplate_mentions() -> Non
 
     markdown = generate_article_markdown(research, experiments, [])
 
-    assert "Total batch size: `2**16`" in markdown
-    assert "Warmdown ratio: `0.7`" in markdown
+    assert (
+        "**Training scale and schedule:** Set total batch size to `2**16`" in markdown
+    )
+    assert "Set warmdown ratio to `0.7`" in markdown
+    assert (
+        "how much of the run is spent gradually reducing the learning rate" in markdown
+    )

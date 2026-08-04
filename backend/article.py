@@ -289,6 +289,115 @@ def _candidate_description(item: Mapping[str, Any]) -> str:
     return description[0].lower() + description[1:] if description else "the candidate"
 
 
+def _setting_why_it_matters(item: Mapping[str, Any]) -> str:
+    """Translate a persisted setting into the decision it controls for the reader."""
+    key = _setting_key(item)
+    explanations = {
+        "batch_size": (
+            "This controls how much training data is combined before each optimizer "
+            "update, so changing it would change the tested training recipe."
+        ),
+        "warmdown": (
+            "This controls how much of the run is spent gradually reducing the learning "
+            "rate near the end."
+        ),
+        "warmup": (
+            "This controls how gently the learning rate is introduced at the start of "
+            "the run."
+        ),
+        "matrix_lr": (
+            "This is the step size used for the model's matrix weights, so it directly "
+            "sets how aggressively those weights are updated."
+        ),
+        "weight_decay": (
+            "This controls how strongly training discourages weights from growing too "
+            "large."
+        ),
+        "adam_betas": (
+            "These values control how Adam smooths recent gradients before updating its "
+            "parameters."
+        ),
+        "momentum_ramp": (
+            "This controls how quickly the Muon optimizer reaches its full momentum."
+        ),
+        "bos_targets": (
+            "This keeps the artificial beginning-of-sequence marker from contributing "
+            "to the training loss."
+        ),
+        "window_pattern": (
+            "This decides which layers use short context and which retain full context."
+        ),
+        "short_attention_window": (
+            "This limits how much nearby text the early layers inspect while preserving "
+            "the recorded full-context final layer."
+        ),
+    }
+    return explanations.get(
+        key,
+        "This is part of the accepted configuration, so keep it unchanged when "
+        "reproducing the measured result.",
+    )
+
+
+def _recipe_line(item: Mapping[str, Any]) -> str:
+    description = _setting_description(item).rstrip(".")
+    key = _setting_key(item)
+    if key == "bos_targets":
+        instruction = "Exclude BOS training targets from the loss"
+    elif ": " in description:
+        label, value = description.split(": ", 1)
+        instruction = f"set {label.lower()} to {value}"
+    else:
+        instruction = f"keep the accepted change, {description}"
+    why = _setting_why_it_matters(item)
+    return f"{instruction}. {why}".rstrip(".")
+
+
+def _recipe_group(item: Mapping[str, Any]) -> tuple[str, int]:
+    key = _setting_key(item)
+    if key in {"batch_size", "warmup", "warmdown"}:
+        return ("Training scale and schedule", 0)
+    if key in {"matrix_lr", "weight_decay", "adam_betas", "momentum_ramp"}:
+        return ("Optimizer", 1)
+    if key in {"window_pattern", "short_attention_window", "bos_targets"}:
+        return ("Context and targets", 2)
+    return ("Other accepted choices", 3)
+
+
+def _grouped_recipe(
+    settings: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, list[Mapping[str, Any]]]]:
+    groups: dict[tuple[str, int], list[Mapping[str, Any]]] = {}
+    for item in settings:
+        group = _recipe_group(item)
+        groups.setdefault(group, []).append(item)
+    return [
+        (label, groups[(label, order)])
+        for label, order in sorted(groups, key=lambda group: group[1])
+    ]
+
+
+def _measured_range(item: Mapping[str, Any]) -> str | None:
+    previous = _number(item.get("previous_best"))
+    measured = _number(item.get("metric_value"))
+    if previous is None or measured is None:
+        return None
+    return f"**{_format_metric(previous)} → {_format_metric(measured)}**"
+
+
+def _gain_summary(
+    baseline: float,
+    best: float,
+    *,
+    lower_is_better: bool,
+) -> tuple[float, float | None]:
+    absolute = baseline - best if lower_is_better else best - baseline
+    relative = (
+        absolute / abs(baseline) * 100 if not math.isclose(baseline, 0.0) else None
+    )
+    return absolute, relative
+
+
 def _accepted_gain(item: Mapping[str, Any], *, lower_is_better: bool) -> float:
     measured = _number(item.get("metric_value"))
     previous = _number(item.get("previous_best"))
@@ -460,7 +569,7 @@ def generate_article_markdown(
     experiments: Sequence[Mapping[str, Any]],
     logs: Sequence[Mapping[str, Any]],
 ) -> str:
-    """Turn persisted run facts into a concise, evidence-backed recommendation."""
+    """Turn persisted run facts into a reader-first, evidence-backed answer."""
     ordered_experiments = sorted(experiments, key=_experiment_number)
     lower_is_better = _is_lower_better(research)
     metric = _one_line(research.get("metric_name")) or "the tracked metric"
@@ -480,81 +589,70 @@ def generate_article_markdown(
         if item.get("accepted") is None and not item.get("error")
     ]
 
+    # Lead with the answer a person would give in conversation. The reader should
+    # not have to work through a lab report before learning what to do.
     opening: list[str] = []
     if improved and best_item is not None:
         experiment_number = _experiment_number(best_item)
-        opening.append(
-            f"Use the accepted configuration from experiment {experiment_number}. It reached "
-            f"the best recorded {metric_label} of **{_format_metric(best)}**."
+        assert baseline is not None and best is not None
+        absolute_gain, relative_gain = _gain_summary(
+            baseline,
+            best,
+            lower_is_better=lower_is_better,
         )
+        direction = "lowered" if lower_is_better else "raised"
+        gain_text = f" by **{absolute_gain:.6f}**"
+        if relative_gain is not None:
+            gain_text += f" (**{relative_gain:.2f}%**)"
+        opening.extend(
+            [
+                (
+                    "If I were setting this up, I would start with the configuration "
+                    f"saved after experiment **{experiment_number}**."
+                ),
+                (
+                    f"It {direction} {metric_label} from "
+                    f"**{_format_metric(baseline)}** to "
+                    f"**{_format_metric(best)}**{gain_text}."
+                ),
+            ]
+        )
+        if is_prediction_loss:
+            opening.append(
+                "The practical takeaway is simple: the model became less uncertain on "
+                "unseen text, and this is the strongest recipe the run actually measured."
+            )
+        else:
+            opening.append(
+                "That is the strongest completed result in the saved experiments, so it "
+                "is the configuration I would use as the new reference."
+            )
     elif improved:
         opening.append(
-            f"The best persisted {metric_label} is **{_format_metric(best)}**, but the saved "
-            "records do not link that score to an accepted experiment. Treat it as a result "
-            "to verify, not yet as a configuration recommendation."
+            f"There is a promising result here: the best saved {metric_label} is "
+            f"**{_format_metric(best)}**. I would not ask you to adopt a configuration yet, "
+            "though, because the saved records do not connect that score to an accepted "
+            "experiment. Verify the result once more before treating it as a recipe."
         )
     elif baseline is not None:
         opening.append(
-            f"Keep the baseline as the reference for now. It measured **{_format_metric(baseline)}** "
-            f"on {metric_label}, and no persisted change has beaten it."
+            f"The honest answer is to keep the baseline for now. It measured "
+            f"**{_format_metric(baseline)}** on {metric_label}, and none of the completed, "
+            "persisted changes beat it. There is not yet enough evidence to recommend a "
+            "different setup."
         )
     else:
         opening.append(
-            "There is not enough measured evidence to recommend a configuration yet. No valid "
-            f"{metric_label} score has been persisted."
+            "I do not have enough measured evidence to tell you to change the setup yet. "
+            f"No valid {metric_label} score was saved, so any specific recommendation would "
+            "be guesswork."
         )
-
-    if improved and baseline is not None and best is not None:
-        absolute_gain = baseline - best if lower_is_better else best - baseline
-        relative_gain = (
-            absolute_gain / abs(baseline) * 100
-            if not math.isclose(baseline, 0.0)
-            else None
-        )
-        movement = "fell" if lower_is_better else "rose"
-        comparison_subject = "prediction loss" if is_prediction_loss else "the score"
-        comparison = (
-            f"From the **{_format_metric(baseline)}** baseline, {comparison_subject} {movement} by "
-            f"**{absolute_gain:.6f}**"
-        )
-        if relative_gain is not None:
-            comparison += f", or **{relative_gain:.2f}%**"
-        opening.append(comparison + ".")
 
     lines = [" ".join(opening)]
-
-    if unresolved:
-        subject = _counted_noun(len(unresolved), "newer candidate")
-        verb = "has" if len(unresolved) == 1 else "have"
-        lines.extend(
-            [
-                "",
-                f"{subject.capitalize()} {verb} no completed measurement and is not part of this recommendation."
-                if len(unresolved) == 1
-                else f"{subject.capitalize()} {verb} no completed measurements and are not part of this recommendation.",
-            ]
-        )
 
     objective = _one_line(research.get("objective") or research.get("original_prompt"))
     if is_prediction_loss:
         objective = _prediction_loss_language(objective)
-    lines.extend(["", "## What this study was trying to do", ""])
-    if objective:
-        lines.extend([objective, ""])
-    if is_prediction_loss:
-        lines.append(
-            "`val_bpb` is the raw name for **validation bits per byte**, the prediction loss "
-            "used here. In plain language, it estimates how many bits the model needs to "
-            "encode each byte of held-out validation text. Lower prediction loss is better, "
-            "and comparisons are meaningful when the evaluation setup is the same."
-        )
-    else:
-        direction = "lower" if lower_is_better else "higher"
-        lines.append(
-            f"The saved comparison rule says **{direction} is better** for `{metric}`. "
-            "This summary uses that rule and does not infer any broader quality claim."
-        )
-
     settings = _final_settings(
         ordered_experiments,
         baseline,
@@ -562,25 +660,33 @@ def generate_article_markdown(
         lower_is_better=lower_is_better,
     )
     if improved and best_item is not None:
-        lines.extend(["", "## Recommended configuration", ""])
+        lines.extend(["", "## The setup I would copy", ""])
         commit = _one_line(best_item.get("git_commit")) or _one_line(
             research.get("best_git_commit")
         )
         if commit:
             lines.append(
-                f"The reproducible checkpoint is accepted commit `{commit}`. Its key persisted settings are:"
+                f"Start from accepted commit `{commit}` and keep the choices below together. "
+                "They were tested as a sequence, so the evidence supports the final package "
+                "rather than a mix-and-match version of it."
             )
         else:
             lines.append(
-                "The key persisted settings in the best accepted configuration are:"
+                "Keep the choices below together. They were tested as a sequence, so the "
+                "evidence supports the final package rather than a mix-and-match version of it."
             )
         if settings:
             lines.append("")
-            for item in settings:
-                description = _setting_description(item).rstrip(".")
+            for label, group_items in _grouped_recipe(settings):
+                fragments = [_recipe_line(item) for item in group_items]
                 if is_prediction_loss:
-                    description = _prediction_loss_language(description)
-                lines.append(f"- {description}.")
+                    fragments = [
+                        _prediction_loss_language(fragment) for fragment in fragments
+                    ]
+                grouped_text = ". ".join(
+                    fragment[0].upper() + fragment[1:] for fragment in fragments
+                )
+                lines.append(f"- **{label}:** {grouped_text}.")
         else:
             summary = _clean_change_summary(best_item.get("change_summary")).rstrip(".")
             if is_prediction_loss:
@@ -588,17 +694,103 @@ def generate_article_markdown(
             lines.extend(
                 [
                     "",
-                    f"- {summary}.",
+                    f"- Keep the saved accepted change: {summary}.",
                 ]
             )
+
+    accepted_steps = [
+        item
+        for item in ordered_experiments
+        if item.get("accepted") is True
+        and not item.get("error")
+        and not _is_baseline_experiment(item, baseline)
+        and (
+            best_item is None
+            or _experiment_number(item) <= _experiment_number(best_item)
+        )
+        and _number(item.get("metric_value")) is not None
+        and _number(item.get("previous_best")) is not None
+    ]
+
+    rationale_heading = (
+        "## Why I would trust this result"
+        if improved and best_item is not None
+        else "## What I am basing that on"
+    )
+    lines.extend(["", rationale_heading, ""])
+    if objective:
+        lines.extend([f"You asked the run to do this: {objective}", ""])
+    if is_prediction_loss:
+        lines.append(
+            "The only bit of jargon you need is `val_bpb`, short for **validation bits "
+            "per byte**. Think of it as how surprised the model is by text it did not train "
+            "on: lower is better. All of the numbers here came from the same saved "
+            "evaluation setup, so they can be compared directly."
+        )
+    else:
+        direction = "lower" if lower_is_better else "higher"
+        lines.append(
+            f"For `{metric}`, the run defines **{direction} as better**. I have kept the "
+            "answer to what the completed measurements support, rather than making a "
+            "broader claim."
+        )
+
+    if accepted_steps:
+        biggest = max(
+            accepted_steps,
+            key=lambda item: _accepted_gain(item, lower_is_better=lower_is_better),
+        )
+        biggest_description = _candidate_description(biggest)
+        if is_prediction_loss:
+            biggest_description = _prediction_loss_language(biggest_description)
+        biggest_range = _measured_range(biggest)
+        lines.extend(
+            [
+                "",
+                (
+                    f"The turning point was {biggest_description}. Experiment "
+                    f"**{_experiment_number(biggest)}** moved {metric_label} "
+                    f"{biggest_range or 'to its next accepted value'}—the largest single "
+                    "gain in the run."
+                ),
+            ]
+        )
+        final_step = max(accepted_steps, key=_experiment_number)
+        if final_step is not biggest:
+            final_description = _candidate_description(final_step)
+            if is_prediction_loss:
+                final_description = _prediction_loss_language(final_description)
+            final_range = _measured_range(final_step)
+            lines.extend(
+                [
+                    "",
+                    (
+                        "The rest was refinement. The last accepted adjustment was "
+                        f"{final_description}, which took {metric_label} "
+                        f"{final_range or 'to its final accepted value'} in experiment "
+                        f"**{_experiment_number(final_step)}**."
+                    ),
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    "So if you are validating the result in stages, check the turning-point "
+                    "change first. If you want the recorded best result, keep the whole "
+                    "accepted recipe together."
+                ),
+            ]
+        )
 
     rejections = _useful_rejections(
         ordered_experiments, lower_is_better=lower_is_better
     )
     if rejections:
-        lines.extend(["", "## What did not help", ""])
+        lines.extend(["", "## What I would leave out", ""])
         lines.append(
-            "These completed comparisons are the useful boundaries; unmeasured failures are not treated as model evidence:"
+            "A few ideas completed cleanly and still went the wrong way. I would not put "
+            "them back into this setup without new evidence:"
         )
         lines.append("")
         for item in rejections:
@@ -607,16 +799,26 @@ def generate_article_markdown(
             if is_prediction_loss:
                 candidate = _prediction_loss_language(candidate)
             lines.append(
-                f"- Experiment {number} tested {candidate}. It scored "
-                f"**{_format_metric(item.get('metric_value'))}** against the then-best "
-                f"**{_format_metric(item.get('previous_best'))}**, so it was not retained."
+                f"- Skip {candidate}: {metric_label} went "
+                f"**{_format_metric(item.get('previous_best'))} → "
+                f"{_format_metric(item.get('metric_value'))}** in experiment "
+                f"**{number}**, so the run rejected it."
             )
 
     notes = _operational_notes(ordered_experiments, logs)
-    if notes:
-        lines.extend(["", "## Run notes", ""])
+    if unresolved or notes:
+        lines.extend(["", "## A final note", ""])
+        if unresolved:
+            subject = _counted_noun(len(unresolved), "newer candidate")
+            verb = "does" if len(unresolved) == 1 else "do"
+            lines.append(
+                f"{subject.capitalize()} {verb} not have a completed measurement, so I left "
+                f"{'it' if len(unresolved) == 1 else 'them'} out of the recommendation."
+            )
+            if notes:
+                lines.append("")
         if is_prediction_loss:
             notes = [_prediction_loss_language(note) for note in notes]
-        lines.extend(f"- {note}" for note in notes)
+        lines.extend(notes)
 
     return "\n".join(lines).rstrip() + "\n"

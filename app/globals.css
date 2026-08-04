@@ -225,9 +225,14 @@ a {
   width: min(1420px, 124vw);
   height: 420px;
   pointer-events: none;
-  opacity: 0.88;
-  background: radial-gradient(ellipse at center, rgba(190, 83, 164, 0.09), transparent 62%);
-  filter: blur(8px) saturate(1.14) drop-shadow(0 0 28px rgba(204, 94, 171, 0.18));
+  opacity: 1;
+  background: radial-gradient(ellipse at center, rgba(215, 92, 179, 0.14), transparent 64%);
+  filter:
+    blur(3px)
+    saturate(1.38)
+    brightness(1.18)
+    drop-shadow(0 0 24px rgba(241, 102, 188, 0.34))
+    drop-shadow(0 0 54px rgba(159, 94, 239, 0.22));
   transform: translate(-50%, -56%);
   mask-image: linear-gradient(90deg, transparent, black 13%, black 87%, transparent);
 }
@@ -1717,7 +1722,7 @@ a {
   .gpu-line-backdrop {
     width: 145vw;
     height: 310px;
-    opacity: 0.76;
+    opacity: 0.9;
   }
 
   .research-composer {

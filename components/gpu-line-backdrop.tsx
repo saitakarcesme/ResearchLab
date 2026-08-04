@@ -35,17 +35,17 @@ export function GpuLineBackdrop({ utilization }: { utilization: number | null })
         <LineChart data={points} margin={{ top: 20, right: 0, bottom: 20, left: 0 }}>
           <defs>
             <linearGradient id="ambientGpuStroke" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#a56cf4" stopOpacity={0.42} />
-              <stop offset="52%" stopColor="#f47bc0" stopOpacity={1} />
-              <stop offset="100%" stopColor="#8c63e8" stopOpacity={0.46} />
+              <stop offset="0%" stopColor="#b77bff" stopOpacity={0.68} />
+              <stop offset="50%" stopColor="#ff82c8" stopOpacity={1} />
+              <stop offset="100%" stopColor="#a879ff" stopOpacity={0.72} />
             </linearGradient>
           </defs>
           <Line
             type="monotone"
             dataKey="value"
-            stroke="#dc69b0"
-            strokeWidth={14}
-            strokeOpacity={0.12}
+            stroke="#f16ebc"
+            strokeWidth={26}
+            strokeOpacity={0.1}
             isAnimationActive={false}
             dot={false}
           />
@@ -53,7 +53,16 @@ export function GpuLineBackdrop({ utilization }: { utilization: number | null })
             type="monotone"
             dataKey="value"
             stroke="url(#ambientGpuStroke)"
-            strokeWidth={3.4}
+            strokeWidth={9}
+            strokeOpacity={0.32}
+            isAnimationActive={false}
+            dot={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="url(#ambientGpuStroke)"
+            strokeWidth={3.8}
             isAnimationActive={!reduceMotion}
             animationDuration={900}
             dot={false}
