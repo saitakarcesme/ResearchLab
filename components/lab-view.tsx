@@ -10,6 +10,7 @@ import { formatMetric, formatTokenCount, metricLabel } from "@/lib/format";
 import { modelDisplayName, modelProviderLabel } from "@/lib/model-label";
 import type { GpuSource, GpuTelemetry, LocalModel, Research, ResearcherModel, ResearchType } from "@/lib/types";
 import { GpuLineBackdrop } from "./gpu-line-backdrop";
+import { LabGpuSection } from "./lab-gpu-section";
 import { ResearchLiveView } from "./research-live-view";
 import { ResearcherModelSelect } from "./researcher-model-select";
 import { LabTotalTokenUsage } from "./research-runtime-metrics";
@@ -169,7 +170,7 @@ export function LabView() {
   }, [pendingPrompt, researchType, selectedSource, selectedSourceType]);
 
   const visibleResearches = useMemo(
-    () => [...researches].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 6),
+    () => [...researches].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 3),
     [researches],
   );
   const totalTokenUsage = useMemo(
@@ -488,6 +489,9 @@ export function LabView() {
             </motion.div>
           ) : null}
         </AnimatePresence>
+        {!loading && !prompt.trim() && !pendingPrompt ? (
+          <LabGpuSection sources={sources} telemetry={telemetry} />
+        ) : null}
         {!loading && !prompt.trim() && !pendingPrompt ? (
           <LabTotalTokenUsage value={totalTokenUsage} input={totalInputTokens} output={totalOutputTokens} />
         ) : null}
