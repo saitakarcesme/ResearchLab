@@ -1,0 +1,37 @@
+param(
+    [switch]$EnableExecution,
+    [string]$WslDistro = "Ubuntu-24.04"
+)
+
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$venvPython = Join-Path $projectRoot "backend\.venv\Scripts\python.exe"
+
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    throw "Backend environment is missing. Run scripts/setup.ps1 first."
+}
+
+$previousExecution = $env:AUTORESEARCH_ENABLE_EXECUTION
+$previousWsl = $env:AUTORESEARCH_WSL_DISTRO
+$env:AUTORESEARCH_ENABLE_EXECUTION = if ($EnableExecution) { "1" } else { "0" }
+$env:AUTORESEARCH_WSL_DISTRO = $WslDistro
+
+$backendProcess = $null
+Push-Location $projectRoot
+try {
+    $backendProcess = Start-Process `
+        -FilePath $venvPython `
+        -ArgumentList @("-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "7331") `
+        -WorkingDirectory $projectRoot `
+        -WindowStyle Hidden `
+        -PassThru
+    npm run dev
+}
+finally {
+    if ($backendProcess -and -not $backendProcess.HasExited) {
+        Stop-Process -Id $backendProcess.Id
+    }
+    $env:AUTORESEARCH_ENABLE_EXECUTION = $previousExecution
+    $env:AUTORESEARCH_WSL_DISTRO = $previousWsl
+    Pop-Location
+}

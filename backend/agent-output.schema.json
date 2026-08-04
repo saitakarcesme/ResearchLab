@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "hypothesis",
+    "files_changed",
+    "change_summary",
+    "evaluation_command",
+    "expected_improvement"
+  ],
+  "properties": {
+    "hypothesis": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 1
+    },
+    "change_summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "evaluation_command": { "type": "string", "const": "uv run train.py" },
+    "expected_improvement": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}

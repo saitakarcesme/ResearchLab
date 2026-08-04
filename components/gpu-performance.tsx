@@ -1,0 +1,72 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Area, AreaChart, ResponsiveContainer } from "recharts";
+import { formatMemory } from "@/lib/format";
+import type { GpuTelemetry } from "@/lib/types";
+
+interface UsagePoint { sample: number; value: number }
+
+export function GpuPerformance({ telemetry, target }: { telemetry: GpuTelemetry | null; target: number }) {
+  const cursor = useRef(0);
+  const [history, setHistory] = useState<UsagePoint[]>([]);
+
+  useEffect(() => {
+    if (telemetry?.utilization == null) return;
+    cursor.current += 1;
+    setHistory((current) => [
+      ...current.slice(-29),
+      { sample: cursor.current, value: telemetry.utilization as number },
+    ]);
+  }, [telemetry?.sampled_at, telemetry?.utilization]);
+
+  const used = telemetry?.memory_used_mb ?? null;
+  const total = telemetry?.memory_total_mb ?? null;
+  const memoryPercent = used != null && total ? Math.min(100, (used / total) * 100) : 0;
+
+  return (
+    <section className="surface-card gpu-card" aria-labelledby="gpu-title">
+      <div className="card-heading gpu-heading">
+        <div>
+          <span className="eyebrow">GPU performance</span>
+          <h2 id="gpu-title">{telemetry?.name ?? "GPU unavailable"}</h2>
+        </div>
+        <span className={`live-indicator ${telemetry?.available ? "online" : ""}`}>
+          <i /> {telemetry?.available ? "live" : "offline"}
+        </span>
+      </div>
+
+      <div className="gpu-hero-metric">
+        <strong>{telemetry?.utilization == null ? "—" : `${Math.round(telemetry.utilization)}%`}</strong>
+        <span>actual utilization</span>
+      </div>
+
+      <div className="gpu-sparkline" aria-hidden="true">
+        {history.length > 1 ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={history} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="gpuCardFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#b478ee" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#b478ee" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Area type="monotone" dataKey="value" stroke="#c78af1" strokeWidth={2} fill="url(#gpuCardFill)" dot={false} isAnimationActive animationDuration={400} />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : <div className="quiet-sparkline" />}
+      </div>
+
+      <div className="gpu-stats">
+        <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "—" : `${Math.round(telemetry.temperature)}°C`}</strong></div>
+        <div><span>VRAM</span><strong>{formatMemory(used)} / {formatMemory(total)}</strong></div>
+        <div><span>Target allocation</span><strong>{target}%</strong></div>
+      </div>
+
+      <div className="memory-track" aria-label={total ? `VRAM ${Math.round(memoryPercent)} percent used` : "VRAM unavailable"}>
+        <span style={{ width: `${memoryPercent}%` }} />
+      </div>
+      <p className="allocation-note">Target guides scheduling; live usage is measured separately.</p>
+    </section>
+  );
+}
