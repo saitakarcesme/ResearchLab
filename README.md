@@ -35,6 +35,34 @@ Open `http://localhost:3000/lab`. Omit `-EnableExecution` when you only want to
 inspect the UI, SQLite persistence, and real GPU telemetry without allowing
 Codex or training subprocesses to start.
 
+### Use the same Lab from a Mac
+
+Install Tailscale on this Windows computer and the Mac, sign both into the same
+tailnet, then start ResearchLab with private HTTPS access:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-local.ps1 -EnableExecution -EnableTailnetAccess
+```
+
+The command prints the private Tailscale URL to open on the Mac. The browser
+uses the Windows API through the same origin, so local-GPU work still runs on
+this computer. The Windows computer and ResearchLab process must remain on.
+Tailscale Serve does not expose the app to the public internet.
+
+### Rent a cloud GPU
+
+Open Settings and connect Shadeform or RunPod. Provider API keys are encrypted
+with Windows DPAPI and never stored in SQLite or returned by the API. Funds stay
+in the provider wallet: the billing link opens its hosted credit page, while
+ResearchLab enforces an account budget and a maximum duration for each rental.
+
+For Shadeform, add the public half of a key already loaded in the Windows SSH
+agent to Shadeform and enter its SSH key ID. RunPod must likewise have the
+matching account SSH key configured. Once the provider reports a public SSH
+endpoint, the rental appears as a normal remote GPU source and can be selected
+for a research. Terminate unused rentals from Settings; the background watcher
+also terminates them at the configured spend limit.
+
 Lab runs measurable GPU experiments and model benchmarks. The selected
 research agent is persisted separately from the model being benchmarked.
 

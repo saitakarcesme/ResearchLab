@@ -1,5 +1,6 @@
 param(
     [switch]$EnableExecution,
+    [switch]$EnableTailnetAccess,
     [string]$WslDistro = "Ubuntu-24.04"
 )
 
@@ -25,6 +26,15 @@ try {
         -WorkingDirectory $projectRoot `
         -WindowStyle Hidden `
         -PassThru
+    if ($EnableTailnetAccess) {
+        $tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
+        if (-not $tailscale) {
+            throw "Tailscale is not installed. Install and sign in, then run again with -EnableTailnetAccess."
+        }
+        & $tailscale.Source serve --bg http://127.0.0.1:3000
+        Write-Host "Private Mac access is enabled through Tailscale Serve."
+        & $tailscale.Source serve status
+    }
     npm run dev
 }
 finally {

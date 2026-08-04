@@ -264,7 +264,7 @@ export function ResearchLiveView({
     >
       <div className="research-live-content" inert={deleteOpen ? true : undefined} aria-hidden={deleteOpen || undefined}>
       <div className="research-tv-stats" aria-label="Research monitoring summary">
-        <div className="research-tv-status" aria-label={research.status}><span className={`research-tv-dot research-tv-dot-${research.status}`} /></div>
+        <div className="research-tv-status"><StatusPill status={research.status} queuePosition={research.queue_position} /></div>
         <div className="research-tv-token">
           <AnimatedTokenCount value={research.total_tokens ?? 0} />
           <span>Research agent token usage</span>
@@ -279,6 +279,10 @@ export function ResearchLiveView({
             showStartedAt={false}
           />
           <span>Run time</span>
+        </div>
+        <div className="research-tv-processed">
+          <AnimatedTokenCount value={research.training_tokens ?? 0} />
+          <span>Processed tokens</span>
         </div>
       </div>
       <header className="research-header">
@@ -371,6 +375,11 @@ export function ResearchLiveView({
           <span>Research agent token usage</span>
           <AnimatedTokenCount value={research.total_tokens ?? 0} />
           <small>{tokenBreakdown(research)}</small>
+        </div>
+        <div className="research-runtime-tokens research-runtime-processed">
+          <span>Processed tokens</span>
+          <AnimatedTokenCount value={research.training_tokens ?? 0} />
+          <small>Measured by completed GPU experiments</small>
         </div>
       </div>
 
