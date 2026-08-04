@@ -54,7 +54,7 @@ export function GpuPerformance({
       </div>
 
       <div className="gpu-hero-metric">
-        <strong>{telemetry?.utilization == null ? "—" : `${Math.round(telemetry.utilization)}%`}</strong>
+        <strong>{telemetry?.utilization == null ? "â€”" : `${Math.round(telemetry.utilization)}%`}</strong>
         <span>live GPU utilization</span>
       </div>
 
@@ -64,18 +64,18 @@ export function GpuPerformance({
             <AreaChart data={history} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="gpuCardFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#b478ee" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#b478ee" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#d8d8d8" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#d8d8d8" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <Area type="monotone" dataKey="value" stroke="#c78af1" strokeWidth={2} fill="url(#gpuCardFill)" dot={false} isAnimationActive animationDuration={400} />
+              <Area type="monotone" dataKey="value" stroke="#f2f2f2" strokeWidth={2} fill="url(#gpuCardFill)" dot={false} isAnimationActive animationDuration={400} />
             </AreaChart>
           </ResponsiveContainer>
         ) : <div className="quiet-sparkline" />}
       </div>
 
       <div className="gpu-stats">
-        <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "—" : `${Math.round(telemetry.temperature)}°C`}</strong></div>
+        <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "â€”" : `${Math.round(telemetry.temperature)}Â°C`}</strong></div>
         <div><span>VRAM</span><strong>{formatMemory(used)} / {formatMemory(total)}</strong></div>
         <div><span>Scheduler share</span><strong>{target}%</strong></div>
       </div>

@@ -53,8 +53,8 @@ function ExperimentDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?
       cx={cx}
       cy={cy}
       r={payload.accepted ? 5 : 4}
-      fill={payload.accepted ? "#ef8bc3" : "#25212c"}
-      stroke={payload.accepted ? "#ffd0e9" : "#756d7e"}
+      fill={payload.accepted ? "#f2f2f2" : "#252525"}
+      stroke={payload.accepted ? "#ffffff" : "#777777"}
       strokeWidth={payload.accepted ? 2 : 1.5}
     />
   );
@@ -106,16 +106,16 @@ function ProgressChartComponent({
               <ComposedChart data={points} margin={{ top: 12, right: 14, left: -8, bottom: 0 }}>
                 <defs>
                   <linearGradient id="progressFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ec78b9" stopOpacity={0.22} />
-                    <stop offset="100%" stopColor="#ec78b9" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#d8d8d8" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="#d8d8d8" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid vertical={false} stroke="rgba(255,255,255,.045)" />
+                <CartesianGrid vertical={false} stroke="rgba(255, 255, 255,.045)" />
                 <XAxis
                   dataKey="experiment"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: "#77707e", fontSize: 11 }}
+                  tick={{ fill: "#b8b8b8", fontSize: 11 }}
                   tickMargin={10}
                 />
                 <YAxis
@@ -123,18 +123,18 @@ function ProgressChartComponent({
                   domain={["auto", "auto"]}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: "#77707e", fontSize: 11 }}
+                  tick={{ fill: "#b8b8b8", fontSize: 11 }}
                   tickFormatter={(value) => formatMetric(Number(value))}
                   width={58}
                 />
                 <Tooltip
-                  cursor={{ stroke: "rgba(255,255,255,.12)", strokeDasharray: "3 5" }}
+                  cursor={{ stroke: "rgba(255, 255, 255,.12)", strokeDasharray: "3 5" }}
                   contentStyle={{
-                    background: "rgba(21,18,27,.96)",
-                    border: "1px solid rgba(255,255,255,.07)",
+                    background: "rgba(19, 19, 19,.96)",
+                    border: "1px solid rgba(255, 255, 255,.07)",
                     borderRadius: 14,
-                    color: "#f5f1f6",
-                    boxShadow: "0 16px 50px rgba(0,0,0,.35)",
+                    color: "#b8b8b8",
+                    boxShadow: "0 16px 50px rgba(0, 0, 0,.35)",
                   }}
                   formatter={(value, name) => [formatMetric(Number(value)), name === "best" ? "Best so far" : displayMetric]}
                   labelFormatter={(value) => `Experiment ${value}`}
@@ -143,17 +143,17 @@ function ProgressChartComponent({
                 <Line
                   type="monotone"
                   dataKey="metric"
-                  stroke="#ec78b9"
+                  stroke="#eeeeee"
                   strokeWidth={2.2}
                   dot={<ExperimentDot />}
-                  activeDot={{ r: 6, fill: "#f4a0ce", stroke: "#fff", strokeWidth: 1.5 }}
+                  activeDot={{ r: 6, fill: "#ffffff", stroke: "#ffffff", strokeWidth: 1.5 }}
                   isAnimationActive
                   animationDuration={450}
                 />
                 <Line
                   type="stepAfter"
                   dataKey="best"
-                  stroke="#9c83ed"
+                  stroke="#8c8c8c"
                   strokeWidth={1.8}
                   strokeDasharray="5 5"
                   dot={false}

@@ -249,7 +249,9 @@ def test_model_catalog_and_create_api_pin_the_selected_digest(
         source = client.get("/api/gpu-sources").json()[0]
         catalog = client.get(f"/api/gpu-sources/{source['id']}/models")
         assert catalog.status_code == 200
-        assert catalog.json()["models"][0]["id"] == fake.model.id
+        models = catalog.json()["models"]
+        assert models[0]["id"] == "huggingface:Ibrahimsait/Beyefendi-v2"
+        assert next(item for item in models if item["id"] == fake.model.id)
 
         invalid = client.post(
             "/api/researches",
@@ -276,3 +278,41 @@ def test_model_catalog_and_create_api_pin_the_selected_digest(
         assert body["metric_name"] == "output_tokens_per_second"
         assert body["model_id"] == fake.model.id
         assert body["model_digest"] == fake.model.digest
+
+
+def test_create_api_pins_beyefendi_v2_and_requires_full_gpu(
+    settings, monkeypatch
+) -> None:
+    configured = replace(settings, execution_enabled=False)
+    monkeypatch.setattr(
+        "backend.main.TelemetryService.sample",
+        lambda self, source: {"available": False, "gpu_name": "Test GPU"},
+    )
+    with TestClient(create_app(configured)) as client:
+        source = client.get("/api/gpu-sources").json()[0]
+        payload = {
+            "original_prompt": "Measure my Beyefendi-v2 model's real generation speed",
+            "research_type": "local_model_benchmark",
+            "model_id": "huggingface:Ibrahimsait/Beyefendi-v2",
+            "benchmark_profile": "hf-transformers-text-v1",
+            "gpu_source_id": source["id"],
+        }
+
+        invalid = client.post(
+            "/api/researches",
+            json={**payload, "target_gpu_allocation": 95},
+        )
+        assert invalid.status_code == 422
+
+        created = client.post(
+            "/api/researches",
+            json={**payload, "target_gpu_allocation": 100},
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["status"] == "queued"
+        assert body["adapter_type"] == "huggingface_beyefendi_benchmark"
+        assert body["metric_name"] == "output_tokens_per_second"
+        assert body["model_runtime"] == "huggingface"
+        assert body["benchmark_profile"] == "hf-transformers-text-v1"
+        assert body["target_gpu_allocation"] == 100

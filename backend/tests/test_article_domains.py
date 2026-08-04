@@ -237,11 +237,25 @@ def test_invalid_general_ai_copy_falls_back_without_leaking_run_details(
     assert "train.py" not in markdown
 
 
-def test_technical_prompt_keeps_the_measured_article_path(settings, monkeypatch) -> None:
-    def unexpected_run(*args, **kwargs):
-        raise AssertionError("Technical articles must not use the general prose generator")
+def test_technical_prompt_uses_evidence_led_ai_structure(settings, monkeypatch) -> None:
+    observed: dict[str, bytes] = {}
+    generated = """The useful answer is to begin with the measured bottleneck, then keep only changes that improve the result under the same evaluation. This run shows how to do that without asking the reader to decode the lab's internal bookkeeping.
 
-    monkeypatch.setattr("backend.article.subprocess.run", unexpected_run)
+## What the run can tell us
+
+The comparison stays useful only when every attempt uses the same time budget and the same evaluation. The first result becomes the reference point. Later ideas are judged against the best result already seen, so a promising change is kept only when the measurement moves in the right direction. This makes the graph a compact record of progress rather than a decorative scorecard.
+
+## How to use the result
+
+Start with the accepted changes that produced the best measured result and apply them as one coherent recipe. Treat rejected attempts as boundaries: they show which directions consumed time without improving the outcome. If there is not yet a completed measurement, the honest next step is to finish one controlled baseline before recommending a configuration. That keeps the final advice tied to evidence instead of turning it into a generic list of optimization tips."""
+
+    def fake_run(command, **kwargs):
+        observed["input"] = kwargs["input"]
+        output = Path(command[command.index("--output-last-message") + 1])
+        output.write_text(json.dumps({"markdown": generated}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("backend.article.subprocess.run", fake_run)
     generator = ResearchArticleGenerator(replace(settings, execution_enabled=True))
     markdown = generator.generate(
         {
@@ -252,12 +266,13 @@ def test_technical_prompt_keeps_the_measured_article_path(settings, monkeypatch)
             "baseline_value": None,
             "best_value": None,
         },
-        [],
+        [{"experiment_number": 1, "hypothesis": "Try a smaller window", "accepted": True}],
         [],
     )
 
-    assert "not have enough measured evidence" in markdown
-    assert "validation bits per byte" in markdown
+    assert markdown.startswith("The useful answer")
+    assert b"Try a smaller window" in observed["input"]
+    assert b"Do not reuse a fixed outline" in observed["input"]
 
 
 def test_article_endpoint_applies_the_general_reader_contract(

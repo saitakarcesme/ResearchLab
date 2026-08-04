@@ -19,8 +19,22 @@ def test_database_persists_research_experiments_logs_and_articles(settings) -> N
     experiment = database.create_experiment(
         research["id"], "Lower batch noise", "Changed one setting", None
     )
+    database.update_experiment_token_count(experiment["id"], 1400)
     database.finish_experiment(
-        experiment["id"], metric_value=1.25, accepted=True, git_commit="abc1234"
+        experiment["id"],
+        metric_value=1.25,
+        accepted=True,
+        git_commit="abc1234",
+        token_count=1234,
+    )
+    database.record_codex_token_usage(
+        research["id"],
+        "candidate",
+        call_id="candidate-1",
+        input_tokens=1000,
+        cached_input_tokens=200,
+        output_tokens=234,
+        reasoning_output_tokens=40,
     )
     database.update_research(
         research["id"],
@@ -47,11 +61,66 @@ def test_database_persists_research_experiments_logs_and_articles(settings) -> N
     assert detail is not None
     assert detail["gpu_name"] == "NVIDIA GeForce RTX 3090"
     assert detail["experiment_count"] == 1
+    assert detail["total_tokens"] == 1234
+    assert detail["input_tokens"] == 1000
+    assert detail["cached_input_tokens"] == 200
+    assert detail["output_tokens"] == 234
+    assert detail["reasoning_output_tokens"] == 40
+    assert detail["training_tokens"] == 1400
     assert detail["best_git_commit"] == "abc1234"
     assert detail["experiments"][0]["accepted"] is True
+    assert detail["experiments"][0]["token_count"] == 1400
     assert detail["logs"][0]["id"] == log["id"]
     assert detail["logs"][0]["data"] == {"metric_value": 1.25}
     assert reopened.get_article(article["id"])["markdown"] == "# Test Harness\n"
+
+
+def test_startup_backfills_tokens_from_persisted_benchmark_logs(settings) -> None:
+    database = Database(settings.database_path)
+    database.initialize()
+    source = database.ensure_local_gpu_source("Local GPU")
+    research = database.create_research(
+        {
+            "title": "Token Backfill",
+            "original_prompt": "measure token usage",
+            "objective": "Keep historical token totals",
+            "gpu_source_id": source["id"],
+            "target_gpu_allocation": 100,
+        }
+    )
+    experiment = database.create_experiment(
+        research["id"], "Measure a profile", "No code change", None
+    )
+    database.finish_experiment(
+        experiment["id"], metric_value=5.0, accepted=True, git_commit=None
+    )
+    database.add_log(
+        research["id"],
+        "experiment_accepted",
+        "Profile measured.",
+        experiment_id=experiment["id"],
+        data={
+            "batch_size": 2,
+            "warmup": {
+                "input_tokens_per_request": 10,
+                "total_output_tokens": 4,
+            },
+            "repeats": [
+                {
+                    "input_tokens_per_request": 10,
+                    "total_output_tokens": 8,
+                }
+            ],
+        },
+    )
+
+    reopened = Database(settings.database_path)
+    reopened.initialize()
+    detail = reopened.get_research(research["id"], detail=True)
+    assert detail is not None
+    assert detail["total_tokens"] == 0
+    assert detail["training_tokens"] == 52
+    assert detail["experiments"][0]["token_count"] == 52
 
 
 def test_startup_creates_only_real_local_source_and_recovers_running(settings) -> None:

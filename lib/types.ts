@@ -10,7 +10,7 @@ export type MetricDirection = "lower_is_better" | "higher_is_better";
 
 export type ResearchType = "training_optimization" | "local_model_benchmark";
 
-export type BenchmarkProfile = "ollama-text-v1";
+export type BenchmarkProfile = "ollama-text-v1" | "hf-transformers-text-v1";
 
 export interface Experiment {
   id: string;
@@ -25,14 +25,18 @@ export interface Experiment {
   completed_at: string | null;
   git_commit: string | null;
   error: string | null;
+  token_count?: number;
 }
 
 export interface ResearchLog {
   id: string | number;
   research_id: string;
+  experiment_id?: string | null;
+  level?: "info" | "warning" | "error";
   event_type: string;
   message: string;
   created_at: string;
+  data?: Record<string, unknown> | null;
 }
 
 export interface Research {
@@ -44,11 +48,16 @@ export interface Research {
   metric_name: string;
   metric_direction: MetricDirection;
   research_type: ResearchType;
+  researcher_model_id: string | null;
   model_id: string | null;
   model_digest: string | null;
   model_runtime: string | null;
   benchmark_profile: BenchmarkProfile | null;
   queue_position?: number | null;
+  schedule_start_time?: string | null;
+  schedule_end_time?: string | null;
+  schedule_timezone?: string | null;
+  schedule_utc_offset_minutes?: number | null;
   baseline_value: number | null;
   best_value: number | null;
   gpu_source_id: string | null;
@@ -58,6 +67,12 @@ export interface Research {
   created_at: string;
   updated_at: string;
   experiment_count?: number;
+  total_tokens?: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  training_tokens?: number;
   experiments?: Experiment[];
   logs?: ResearchLog[];
   runtime?: {
@@ -73,12 +88,31 @@ export interface Research {
   };
 }
 
+export interface ResearcherModel {
+  id: string;
+  label: string;
+  description: string;
+  provider: "codex" | "ollama";
+  parameter_size?: string | null;
+  capabilities?: string[];
+  recommended: boolean;
+}
+
+export interface ResearcherModelCatalog {
+  default_model_id: string;
+  models: ResearcherModel[];
+  local_error?: string | null;
+}
+
 export interface LocalModel {
   id: string;
-  provider: "ollama";
+  provider: "ollama" | "huggingface";
   name: string;
   digest: string;
   size_bytes: number;
+  adapter_size_bytes?: number;
+  base_download_size_bytes?: number;
+  runtime_memory_footprint_bytes?: number;
   parameter_size: string | null;
   quantization_level: string | null;
   family: string | null;

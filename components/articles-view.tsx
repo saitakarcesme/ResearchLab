@@ -38,7 +38,7 @@ export function ArticlesView() {
               <div className="cover-sheen" aria-hidden="true" />
               <BookOpen size={18} strokeWidth={1.6} />
               <div className="cover-title">
-                <span>{article.article_kind === "general" ? "Practical guide" : "Research note"}</span>
+                <span>{article.article_kind === "general" ? "Practical guide" : "Lab report"}</span>
                 <h2>{article.title}</h2>
               </div>
               <div className="cover-footer">

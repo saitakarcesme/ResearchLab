@@ -147,7 +147,7 @@ export function ArticleReader({ articleIdentifier }: { articleIdentifier: string
         <article className="article-reader">
           <header className="article-header">
             <div className="article-meta">
-              <span>{isGeneral ? "Practical guide" : "Research journal"}</span>
+              <span>{isGeneral ? "Practical guide" : "Lab journal"}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={article.updated_at || article.created_at}>{publishedAt}</time>
               <span aria-hidden="true">·</span>
@@ -158,7 +158,7 @@ export function ArticleReader({ articleIdentifier }: { articleIdentifier: string
           </header>
           <div className="markdown-body">
             <ArticleMarkdown markdown={introduction} />
-            {!isGeneral ? <ArticleResultChart article={article} /> : null}
+            <ArticleResultChart article={article} />
             <ArticleMarkdown markdown={body} />
           </div>
         </article>

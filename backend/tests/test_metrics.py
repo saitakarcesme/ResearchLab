@@ -5,6 +5,7 @@ import pytest
 from backend.adapters.autoresearch import (
     KarpathyAutoresearchAdapter,
     is_better,
+    live_tokens_from_output,
     parse_evaluation_summary,
     parse_peak_vram_mb,
     parse_val_bpb,
@@ -33,6 +34,14 @@ def test_full_terminal_summary_parser_accepts_canonical_upstream_output() -> Non
     assert parse_peak_vram_mb(VALID_SUMMARY) == pytest.approx(22010.2)
     with pytest.raises(ValueError, match="status 1"):
         parse_val_bpb(VALID_SUMMARY, returncode=1)
+
+
+def test_live_token_counter_uses_only_completed_step_throughput() -> None:
+    output = """step 00000 (0.0%) | loss: 9.0 | dt: 2,000ms | tok/sec: 100,000 | remaining: 300s
+step 00001 (1.0%) | loss: 8.0 | dt: 2500ms | tok/sec: 200,000 | remaining: 297s
+partial line without a completed throughput sample
+"""
+    assert live_tokens_from_output(output) == 700_000
 
 
 def test_metric_only_duplicate_missing_and_non_finite_summaries_are_rejected() -> None:

@@ -30,6 +30,8 @@ class Settings:
     experiment_timeout_seconds: int
     agent_timeout_seconds: int
     agent_reasoning_effort: str
+    researcher_models: tuple[str, ...]
+    default_researcher_model: str
     wsl_distro: str | None
     use_cuda_mps: bool
     cors_origins: tuple[str, ...]
@@ -87,6 +89,8 @@ class Settings:
                 60, int(os.getenv("AUTORESEARCH_AGENT_TIMEOUT", "600"))
             ),
             agent_reasoning_effort=_agent_reasoning_effort(),
+            researcher_models=_researcher_models(),
+            default_researcher_model=_default_researcher_model(),
             wsl_distro=wsl,
             use_cuda_mps=_as_bool(os.getenv("AUTORESEARCH_USE_CUDA_MPS")),
             cors_origins=tuple(
@@ -115,3 +119,34 @@ def _agent_reasoning_effort() -> str:
             f"AUTORESEARCH_AGENT_REASONING_EFFORT must be one of: {values}"
         )
     return effort
+
+
+def _researcher_models() -> tuple[str, ...]:
+    configured = os.getenv(
+        "AUTORESEARCH_RESEARCHER_MODELS",
+        "gpt-5.6-sol,gpt-5.6-terra,gpt-5.3-codex-spark",
+    )
+    models = tuple(
+        dict.fromkeys(item.strip() for item in configured.split(",") if item.strip())
+    )
+    if not models:
+        raise ValueError("AUTORESEARCH_RESEARCHER_MODELS must contain at least one model")
+    for model in models:
+        if len(model) > 120 or not all(
+            character.isalnum() or character in "._:-" for character in model
+        ):
+            raise ValueError(
+                "AUTORESEARCH_RESEARCHER_MODELS contains an invalid model identifier"
+            )
+    return models
+
+
+def _default_researcher_model() -> str:
+    models = _researcher_models()
+    selected = os.getenv("AUTORESEARCH_DEFAULT_RESEARCHER_MODEL", models[0]).strip()
+    if selected not in models:
+        raise ValueError(
+            "AUTORESEARCH_DEFAULT_RESEARCHER_MODEL must be listed in "
+            "AUTORESEARCH_RESEARCHER_MODELS"
+        )
+    return selected

@@ -14,6 +14,7 @@ from backend.telemetry import TelemetryService
 class ResearchRuntime(Protocol):
     stop_event: threading.Event
     run_event: threading.Event
+    control_error: str | None
 
     def set_process(self, process: Any | None) -> None: ...
     def set_phase(self, phase: str) -> None: ...

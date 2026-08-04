@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     default: "Autoresearch Lab",
     template: "%s · Autoresearch Lab",
   },
-  description: "Autonomous, measurable GPU research on local and remote NVIDIA hardware.",
+  description: "Measurable GPU experiments in one focused local research workspace.",
 };
 
 export default function RootLayout({

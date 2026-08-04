@@ -12,6 +12,8 @@ from typing import Protocol
 
 import psutil
 
+MANAGED_RUN_ID_ENV = "AUTORESEARCH_RUN_ID"
+
 
 class RuntimeControl(Protocol):
     stop_event: threading.Event
@@ -151,11 +153,15 @@ def run_managed_process(
     last_tick = started
     active_seconds = 0.0
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process_env = dict(os.environ if env is None else env)
+    research_id = getattr(runtime, "research_id", None)
+    if research_id:
+        process_env[MANAGED_RUN_ID_ENV] = str(research_id)
     with output_path.open("wb") as sink:
         process = subprocess.Popen(
             list(command),
             cwd=str(cwd) if cwd else None,
-            env=dict(env) if env else None,
+            env=process_env,
             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,

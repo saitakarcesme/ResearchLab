@@ -4,13 +4,14 @@ import { ChevronRight, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listGpuSources, listResearches } from "@/lib/api";
-import { formatMetric, metricLabel } from "@/lib/format";
+import { formatMetric, formatTokenCount, metricLabel } from "@/lib/format";
+import { modelDisplayName } from "@/lib/model-label";
 import type { GpuSource, Research } from "@/lib/types";
 import { StatusPill } from "./status-pill";
 
 function researchMethod(research: Research): string {
   if (!research.model_id) return "Training optimization";
-  return research.model_id.replace(/^ollama:/, "").replace(/:latest$/, "");
+  return modelDisplayName(research.model_id) ?? "Local model benchmark";
 }
 
 export function ResearchesView() {
@@ -60,7 +61,7 @@ export function ResearchesView() {
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
       <div className="research-table" aria-live="polite">
         <div className="research-table-head" aria-hidden="true">
-          <span>Research</span><span>Status</span><span>GPU</span><span>Method / model</span><span>Tests</span><span>Best metric</span><span />
+          <span>Research</span><span>Status</span><span>GPU</span><span>Method / model</span><span>Tests</span><span>Agent tokens</span><span>Best metric</span><span />
         </div>
         {loading ? (
           <div className="quiet-row centered table-loading"><LoaderCircle className="spin" size={16} /> Loading researches</div>
@@ -71,6 +72,7 @@ export function ResearchesView() {
             <span data-label="GPU">{research.gpu_source_name ?? sourceNames.get(research.gpu_source_id ?? "") ?? "—"}</span>
             <span className="method-cell" data-label="Method">{researchMethod(research)}</span>
             <span data-label="Tests">{research.experiment_count ?? research.experiments?.length ?? 0}</span>
+            <span data-label="Agent tokens">{formatTokenCount(research.total_tokens)}</span>
             <span className="metric-cell" data-label="Best metric">{metricLabel(research.metric_name)} <strong>{formatMetric(research.best_value)}</strong></span>
             <ChevronRight size={16} />
           </Link>

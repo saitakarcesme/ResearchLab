@@ -10,6 +10,21 @@ export function formatMemory(value: number | null | undefined): string {
   return `${Math.round(value)} MB`;
 }
 
+export function formatTokenCount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const count = Math.max(0, value);
+  if (count >= 1_000_000_000) {
+    return `${(count / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}B`;
+  }
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}M`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}K`;
+  }
+  return Math.round(count).toLocaleString();
+}
+
 export function formatTime(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);

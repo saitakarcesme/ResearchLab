@@ -14,7 +14,16 @@ from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
 from backend.config import Settings
 from backend.db import Database
+from backend.huggingface_models import (
+    BEYEFENDI_V2_BASE_MODEL,
+    BEYEFENDI_V2_BASE_REVISION,
+    BEYEFENDI_V2_MODEL_ID,
+    BEYEFENDI_V2_REVISION,
+    BEYEFENDI_V2_SOURCE_URL,
+    beyefendi_v2_catalog_model,
+)
 from backend.local_models import OllamaClient, OllamaConnectionError
+from backend.researcher_models import researcher_model_catalog, resolve_researcher_model
 from backend.schemas import (
     GpuSourceCreate,
     GpuSourceUpdate,
@@ -39,6 +48,28 @@ def _telemetry(request: Request) -> TelemetryService:
 
 def _ollama(request: Request) -> OllamaClient:
     return request.app.state.ollama
+
+
+def _local_researcher_models(
+    request: Request,
+) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        return list(_ollama(request).completion_models().get("models", [])), None
+    except OllamaConnectionError as exc:
+        return [], str(exc)
+
+
+def _resolve_researcher_model(request: Request, requested: str | None) -> str:
+    local_models: list[dict[str, Any]] = []
+    if requested and requested.startswith("ollama:"):
+        local_models, error = _local_researcher_models(request)
+        if error:
+            raise ValueError(error)
+    return resolve_researcher_model(
+        request.app.state.settings,
+        requested,
+        local_models,
+    )
 
 
 def _not_found(kind: str) -> HTTPException:
@@ -79,7 +110,9 @@ def create_app(
         sample = telemetry.sample(provisional)
         local_name = sample.get("gpu_name") or "Local NVIDIA GPU"
         database.ensure_local_gpu_source(str(local_name))
-        interrupted = database.list_researches(status="running")
+        # A hard crash can leave a managed process behind while its durable row is
+        # running, paused, or failed after an unconfirmed control operation.
+        interrupted = database.list_process_cleanup_candidates()
         ResearchSupervisor.terminate_stale_process_groups(
             configured, database, interrupted
         )
@@ -94,7 +127,7 @@ def create_app(
             configured
         )
         app.state.article_generator = article_generator or ResearchArticleGenerator(
-            configured
+            configured, usage_recorder=database.record_codex_token_usage
         )
         try:
             yield
@@ -188,10 +221,28 @@ def create_app(
                     "remote runtime before selecting models on that source."
                 ),
             )
+        pinned_model = beyefendi_v2_catalog_model()
         try:
-            return _ollama(request).completion_models()
+            catalog = _ollama(request).completion_models()
         except OllamaConnectionError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            catalog = {
+                "runtime": {
+                    "provider": "ollama",
+                    "endpoint": _ollama(request).base_url,
+                    "version": None,
+                    "error": str(exc),
+                },
+                "models": [],
+            }
+        catalog["models"] = [
+            pinned_model,
+            *[
+                model
+                for model in catalog.get("models", [])
+                if model.get("id") != pinned_model["id"]
+            ],
+        ]
+        return catalog
 
     @app.get("/api/telemetry/local")
     def local_telemetry(request: Request) -> dict[str, Any]:
@@ -207,6 +258,15 @@ def create_app(
             raise _not_found("Local GPU source")
         return _telemetry(request).sample(source)
 
+    @app.get("/api/researcher-models")
+    def list_researcher_models(request: Request) -> dict[str, Any]:
+        local_models, local_error = _local_researcher_models(request)
+        return researcher_model_catalog(
+            request.app.state.settings,
+            local_models,
+            local_error=local_error,
+        )
+
     @app.get("/api/researches")
     def list_researches(
         request: Request,
@@ -219,6 +279,12 @@ def create_app(
     @app.post("/api/researches", status_code=status.HTTP_201_CREATED)
     def create_research(payload: ResearchCreate, request: Request) -> dict[str, Any]:
         database = _database(request)
+        try:
+            researcher_model_id = _resolve_researcher_model(
+                request, payload.researcher_model_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         source_id = payload.gpu_source_id
         if source_id is None:
             local = next(
@@ -246,43 +312,73 @@ def create_app(
                     detail="Local-model benchmarks currently require the local GPU source",
                 )
             assert payload.model_id is not None
-            try:
-                installed = _ollama(request).resolve(payload.model_id)
-                shown = _ollama(request).show(installed.name)
-            except (OllamaConnectionError, ValueError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            if "completion" not in (shown.get("capabilities") or []):
-                raise HTTPException(
-                    status_code=409,
-                    detail="The selected Ollama model cannot generate text",
-                )
-            display_name = installed.name.removesuffix(":latest")
-            values = {
-                "title": payload.title or f"{display_name} Local Inference Efficiency",
-                "original_prompt": payload.original_prompt,
-                "objective": payload.objective
-                or (
-                    f"Measure {installed.name} with the same prompt and output length "
-                    "across four context and batch profiles. Maximize median warm output "
-                    "tokens per second while requiring the model to remain fully on the GPU."
-                ),
-                "metric_name": "output_tokens_per_second",
-                "metric_direction": "higher_is_better",
-                "gpu_source_id": source_id,
-                "target_gpu_allocation": payload.target_gpu_allocation,
-                "adapter_type": "ollama_benchmark",
-                "research_type": payload.research_type,
-                "model_id": installed.id,
-                "model_digest": installed.digest,
-                "model_runtime": _ollama(request).base_url,
-                "benchmark_profile": payload.benchmark_profile or "ollama-text-v1",
-                "status": "stopped" if payload.auto_start else "queued",
-            }
+            if payload.model_id == BEYEFENDI_V2_MODEL_ID:
+                values = {
+                    "title": payload.title or "Beyefendi-v2 Hugging Face Speed",
+                    "original_prompt": payload.original_prompt,
+                    "objective": payload.objective
+                    or (
+                        "Measure the pinned Beyefendi-v2 adapter and Qwen3.5-9B base "
+                        "on the RTX 3090 across interactive, long-context, dual-request, "
+                        "and GPU-focused profiles. Exclude model loading and warm-up, "
+                        "then maximize median generated tokens per second while keeping "
+                        "the quantized model fully resident on the GPU."
+                    ),
+                    "metric_name": "output_tokens_per_second",
+                    "metric_direction": "higher_is_better",
+                    "gpu_source_id": source_id,
+                    "target_gpu_allocation": 100,
+                    "adapter_type": "huggingface_beyefendi_benchmark",
+                    "research_type": payload.research_type,
+                    "model_id": BEYEFENDI_V2_MODEL_ID,
+                    "model_digest": BEYEFENDI_V2_REVISION,
+                    "model_runtime": "huggingface",
+                    "benchmark_profile": "hf-transformers-text-v1",
+                    "researcher_model_id": researcher_model_id,
+                    "status": "stopped" if payload.auto_start and not payload.schedule_start_time else "queued",
+                }
+            else:
+                try:
+                    installed = _ollama(request).resolve(payload.model_id)
+                    shown = _ollama(request).show(installed.name)
+                except (OllamaConnectionError, ValueError) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                if "completion" not in (shown.get("capabilities") or []):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The selected Ollama model cannot generate text",
+                    )
+                display_name = installed.name.removesuffix(":latest")
+                values = {
+                    "title": payload.title
+                    or f"{display_name} Local Inference Efficiency",
+                    "original_prompt": payload.original_prompt,
+                    "objective": payload.objective
+                    or (
+                        f"Measure {installed.name} with the same prompt and output length "
+                        "across four context and batch profiles. Maximize median warm output "
+                        "tokens per second while requiring the model to remain fully on the GPU."
+                    ),
+                    "metric_name": "output_tokens_per_second",
+                    "metric_direction": "higher_is_better",
+                    "gpu_source_id": source_id,
+                    "target_gpu_allocation": payload.target_gpu_allocation,
+                    "adapter_type": "ollama_benchmark",
+                    "research_type": payload.research_type,
+                    "model_id": installed.id,
+                    "model_digest": installed.digest,
+                    "model_runtime": _ollama(request).base_url,
+                    "benchmark_profile": payload.benchmark_profile
+                    or "ollama-text-v1",
+                    "researcher_model_id": researcher_model_id,
+                    "status": "stopped" if payload.auto_start and not payload.schedule_start_time else "queued",
+                }
         else:
             brief = request.app.state.brief_generator.generate(
                 payload.original_prompt,
                 supplied_title=payload.title,
                 supplied_objective=payload.objective,
+                researcher_model_id=researcher_model_id,
             )
             values = {
                 "title": brief.title,
@@ -294,21 +390,65 @@ def create_app(
                 "target_gpu_allocation": payload.target_gpu_allocation,
                 "adapter_type": "karpathy_autoresearch",
                 "research_type": payload.research_type,
-                "status": "stopped" if payload.auto_start else "queued",
+                "researcher_model_id": researcher_model_id,
+                "status": "stopped" if payload.auto_start and not payload.schedule_start_time else "queued",
             }
-        research = database.create_research(
-            values
+        values.update(
+            {
+                "schedule_start_time": payload.schedule_start_time,
+                "schedule_end_time": payload.schedule_end_time,
+                "schedule_timezone": payload.schedule_timezone,
+                "schedule_utc_offset_minutes": payload.schedule_utc_offset_minutes,
+            }
         )
+        research = database.create_research(values)
+        if brief and brief.usage.has_usage:
+            database.record_codex_token_usage(
+                research["id"],
+                "brief",
+                call_id=f"{research['id']}:brief",
+                input_tokens=brief.usage.input_tokens,
+                cached_input_tokens=brief.usage.cached_input_tokens,
+                output_tokens=brief.usage.output_tokens,
+                reasoning_output_tokens=brief.usage.reasoning_output_tokens,
+            )
         database.add_log(
             research["id"],
             "research_created",
             (
                 "Research created for an explicit immediate start."
-                if payload.auto_start
+                if payload.auto_start and not payload.schedule_start_time
                 else "Research created and added to the persistent GPU queue."
             ),
         )
+        database.add_log(
+            research["id"],
+            "researcher_model_selected",
+            f"{researcher_model_id} will plan and interpret this Lab research.",
+            data={
+                "researcher_model_id": researcher_model_id,
+                "provider": (
+                    "ollama" if researcher_model_id.startswith("ollama:") else "codex"
+                ),
+            },
+        )
         if payload.research_type == "local_model_benchmark":
+            model_log_data = {
+                "model_id": values["model_id"],
+                "model_digest": values["model_digest"],
+                "benchmark_profile": values["benchmark_profile"],
+                "provider": values["model_runtime"],
+            }
+            if values["model_id"] == BEYEFENDI_V2_MODEL_ID:
+                model_log_data.update(
+                    {
+                        "source_url": BEYEFENDI_V2_SOURCE_URL,
+                        "base_model": BEYEFENDI_V2_BASE_MODEL,
+                        "base_revision": BEYEFENDI_V2_BASE_REVISION,
+                    }
+                )
+            else:
+                model_log_data["ollama_endpoint"] = _ollama(request).base_url
             database.add_log(
                 research["id"],
                 "model_selected",
@@ -317,10 +457,7 @@ def create_app(
                     f"{str(values['model_digest'])[:12]} for a reproducible local benchmark."
                 ),
                 data={
-                    "model_id": values["model_id"],
-                    "model_digest": values["model_digest"],
-                    "benchmark_profile": values["benchmark_profile"],
-                    "ollama_endpoint": _ollama(request).base_url,
+                    **model_log_data,
                 },
             )
         elif brief and brief.warning:
@@ -336,7 +473,7 @@ def create_app(
                 "research_brief_generated",
                 "Codex converted the original prompt into the persisted title and measurable objective.",
             )
-        if payload.auto_start:
+        if payload.auto_start and not payload.schedule_start_time:
             try:
                 return _supervisor(request).start(research["id"])
             except Exception as exc:
@@ -405,17 +542,10 @@ def create_app(
 
     @app.delete("/api/researches/{research_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_research(research_id: str, request: Request) -> Response:
-        database = _database(request)
-        research = database.get_research(research_id)
-        if research is None:
-            raise _not_found("Research")
-        if not database.delete_research(research_id):
-            raise HTTPException(
-                status_code=409,
-                detail="Stop the research before deleting its database record",
-            )
-        if research["status"] == "queued":
-            _supervisor(request).notify_queue()
+        try:
+            _supervisor(request).delete(research_id)
+        except Exception as exc:
+            raise _control_error(exc) from exc
         return Response(status_code=204)
 
     @app.post("/api/researches/{research_id}/start")

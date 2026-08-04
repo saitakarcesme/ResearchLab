@@ -132,7 +132,7 @@ class OllamaBenchmarkAdapter(ResearchAdapter):
             if not acquired:
                 raise InterruptedError
             self.context.runtime.set_phase("evaluating")
-            self._generate(
+            warmup = self._generate(
                 profile,
                 num_predict=16,
                 sample_label=f"profile-{profile_index + 1}-warmup",
@@ -151,6 +151,14 @@ class OllamaBenchmarkAdapter(ResearchAdapter):
             measurements = [
                 self._measure(profile, repeat=index + 1) for index in range(3)
             ]
+            token_count = (
+                int(warmup.get("prompt_eval_count") or 0)
+                + int(warmup.get("eval_count") or 0)
+                + sum(
+                    int(item["prompt_tokens"]) + int(item["output_tokens"])
+                    for item in measurements
+                )
+            )
             speeds = [item["tokens_per_second"] for item in measurements]
             metric = statistics.median(speeds)
             accepted = previous_best is None or metric > float(previous_best)
@@ -165,6 +173,7 @@ class OllamaBenchmarkAdapter(ResearchAdapter):
                 accepted=accepted,
                 git_commit=None,
                 error=None,
+                token_count=token_count,
                 research_updates=updates,
             )
             event = "experiment_accepted" if accepted else "experiment_rejected"

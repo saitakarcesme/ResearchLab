@@ -1,46 +1,56 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, ChevronRight, Gauge, ListPlus, LoaderCircle, Play, Wrench } from "lucide-react";
+import { ArrowUp, CalendarClock, ChevronRight, Gauge, ListPlus, LoaderCircle, Play, Wrench } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createResearch, getGpuTelemetry, listGpuSources, listLocalModels, listResearches } from "@/lib/api";
-import { formatMetric, metricLabel } from "@/lib/format";
-import type { GpuSource, GpuTelemetry, LocalModel, Research, ResearchType } from "@/lib/types";
+import { createResearch, getGpuTelemetry, listGpuSources, listLocalModels, listResearcherModels, listResearches } from "@/lib/api";
+import { formatMetric, formatTokenCount, metricLabel } from "@/lib/format";
+import { modelDisplayName, modelProviderLabel } from "@/lib/model-label";
+import type { GpuSource, GpuTelemetry, LocalModel, Research, ResearcherModel, ResearchType } from "@/lib/types";
 import { GpuLineBackdrop } from "./gpu-line-backdrop";
 import { ResearchLiveView } from "./research-live-view";
+import { ResearcherModelSelect } from "./researcher-model-select";
+import { LabTotalTokenUsage } from "./research-runtime-metrics";
 import { StatusPill } from "./status-pill";
-
-function modelName(modelId: string | null | undefined): string | null {
-  return modelId?.replace(/^ollama:/, "").replace(/:latest$/, "") ?? null;
-}
 
 function modelOption(model: LocalModel): string {
   const details = [model.parameter_size, model.quantization_level].filter(Boolean).join(" · ");
-  return `${model.name}${details ? ` — ${details}` : ""}${model.recommended ? " · recommended" : ""}`;
+  const pinned = model.provider === "huggingface" ? " · pinned" : "";
+  return `${modelProviderLabel(model.provider)} · ${model.name}${details ? ` — ${details}` : ""}${pinned}${model.recommended ? " · recommended" : ""}`;
 }
 
 export function LabView() {
+  const router = useRouter();
   const [prompt, setPrompt] = useState("");
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [researches, setResearches] = useState<Research[]>([]);
   const [sources, setSources] = useState<GpuSource[]>([]);
   const [selectedSource, setSelectedSource] = useState("");
   const [researchType, setResearchType] = useState<ResearchType>("training_optimization");
+  const [researcherModels, setResearcherModels] = useState<ResearcherModel[]>([]);
+  const [selectedResearcherModel, setSelectedResearcherModel] = useState("");
+  const [researcherModelsLoading, setResearcherModelsLoading] = useState(true);
+  const [researcherModelError, setResearcherModelError] = useState<string | null>(null);
   const [models, setModels] = useState<LocalModel[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [allocation, setAllocation] = useState(100);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleStart, setScheduleStart] = useState("22:00");
+  const [scheduleEnd, setScheduleEnd] = useState("07:00");
   const [telemetry, setTelemetry] = useState<GpuTelemetry | null>(null);
-  const [activeResearch, setActiveResearch] = useState<Research | null>(null);
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState<"queue" | "run" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const liveRef = useRef<HTMLDivElement>(null);
   const sourceSelectRef = useRef<HTMLSelectElement>(null);
   const wasConfiguringRef = useRef(false);
+  const requiresFullGpu = selectedModel.startsWith("huggingface:");
+  const effectiveAllocation = requiresFullGpu ? 100 : allocation;
+  const scheduleInvalid = scheduleEnabled && scheduleStart === scheduleEnd;
 
   const load = useCallback(async () => {
     try {
@@ -57,17 +67,46 @@ export function LabView() {
   }, []);
 
   useEffect(() => {
-    if (activeResearch) return;
+    const syncFullscreen = () => setFullscreen(document.fullscreenElement != null);
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
+  useEffect(() => {
     const initial = window.setTimeout(() => void load(), 0);
-    const timer = window.setInterval(() => void load(), 8000);
+    const timer = window.setInterval(() => void load(), 2000);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(timer);
     };
-  }, [activeResearch, load]);
+  }, [load]);
 
   useEffect(() => {
-    if (activeResearch) return;
+    let mounted = true;
+    void listResearcherModels()
+      .then((catalog) => {
+        if (!mounted) return;
+        setResearcherModels(catalog.models);
+        setSelectedResearcherModel(
+          catalog.models.some((model) => model.id === catalog.default_model_id)
+            ? catalog.default_model_id
+            : catalog.models.find((model) => model.recommended)?.id ?? catalog.models[0]?.id ?? "",
+        );
+        setResearcherModelError(catalog.models.length ? null : "No research agent is currently available.");
+      })
+      .catch((nextError) => {
+        if (!mounted) return;
+        setResearcherModels([]);
+        setSelectedResearcherModel("");
+        setResearcherModelError(nextError instanceof Error ? nextError.message : "Could not read research agents.");
+      })
+      .finally(() => {
+        if (mounted) setResearcherModelsLoading(false);
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     async function sample() {
       try {
@@ -83,7 +122,7 @@ export function LabView() {
       mounted = false;
       window.clearInterval(timer);
     };
-  }, [activeResearch, selectedSource]);
+  }, [selectedSource]);
 
   useEffect(() => {
     if (!pendingPrompt) {
@@ -112,14 +151,14 @@ export function LabView() {
           return catalog.models.find((model) => model.recommended)?.id ?? catalog.models[0]?.id ?? "";
         });
         if (!catalog.models.length) {
-          setModelError("No completion-capable Ollama models are installed.");
+          setModelError("No compatible Ollama or pinned Hugging Face models are available.");
         }
       })
       .catch((nextError) => {
         if (cancelled) return;
         setModels([]);
         setSelectedModel("");
-        setModelError(nextError instanceof Error ? nextError.message : "Could not read the installed models.");
+        setModelError(nextError instanceof Error ? nextError.message : "Could not read the model catalog.");
       })
       .finally(() => {
         if (!cancelled) setModelsLoading(false);
@@ -133,6 +172,22 @@ export function LabView() {
     () => [...researches].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 6),
     [researches],
   );
+  const totalTokenUsage = useMemo(
+    () => researches.reduce((total, research) => total + Math.max(0, research.total_tokens ?? 0), 0),
+    [researches],
+  );
+  const totalInputTokens = useMemo(
+    () => researches.reduce((total, research) => total + Math.max(0, research.input_tokens ?? 0), 0),
+    [researches],
+  );
+  const totalOutputTokens = useMemo(
+    () => researches.reduce((total, research) => total + Math.max(0, research.output_tokens ?? 0), 0),
+    [researches],
+  );
+  const monitorResearch = researches.find((research) => research.status === "running")
+    ?? researches.find((research) => research.status === "paused")
+    ?? visibleResearches[0]
+    ?? null;
 
   function prepareLaunch(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -140,7 +195,6 @@ export function LabView() {
     if (!value) return;
     setPendingPrompt(value);
     setError(null);
-    setNotice(null);
     if (researchType === "local_model_benchmark") setModelsLoading(true);
   }
 
@@ -164,38 +218,46 @@ export function LabView() {
 
   async function launch(autoStart: boolean) {
     if (!pendingPrompt || !selectedSource) return;
+    if (!selectedResearcherModel) {
+      setError("Choose the research agent that should run this lab work.");
+      return;
+    }
     if (researchType === "local_model_benchmark" && !selectedModel) {
-      setError("Choose an installed local model before continuing.");
+      setError("Choose a benchmark model before continuing.");
       return;
     }
     setLaunching(autoStart ? "run" : "queue");
     setError(null);
-    setNotice(null);
     try {
+      const scheduled = scheduleEnabled;
+      const shouldStartNow = autoStart && !scheduled;
       const created = await createResearch({
         original_prompt: pendingPrompt,
         gpu_source_id: selectedSource,
-        target_gpu_allocation: allocation,
-        auto_start: autoStart,
+        target_gpu_allocation: effectiveAllocation,
+        auto_start: shouldStartNow,
         research_type: researchType,
+        researcher_model_id: selectedResearcherModel,
+        ...(scheduled
+          ? {
+              schedule_start_time: scheduleStart,
+              schedule_end_time: scheduleEnd,
+              schedule_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+              schedule_utc_offset_minutes: -new Date().getTimezoneOffset(),
+            }
+          : {}),
         ...(researchType === "local_model_benchmark"
-          ? { model_id: selectedModel, benchmark_profile: "ollama-text-v1" as const }
+          ? {
+              model_id: selectedModel,
+              benchmark_profile: selectedModel.startsWith("huggingface:")
+                ? "hf-transformers-text-v1" as const
+                : "ollama-text-v1" as const,
+            }
           : {}),
       });
       setPrompt("");
       setPendingPrompt(null);
-      await load();
-      if (autoStart) {
-        setActiveResearch(created);
-        window.requestAnimationFrame(() => liveRef.current?.scrollIntoView({
-          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-          block: "start",
-        }));
-      } else {
-        setNotice(created.queue_position
-          ? `Added to queue at position ${created.queue_position}.`
-          : "Added to the research queue.");
-      }
+      router.push(`/researches/${created.id}`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Could not create research.");
     } finally {
@@ -204,7 +266,7 @@ export function LabView() {
   }
 
   return (
-    <div className={`lab-page ${activeResearch ? "lab-page-active" : ""}`}>
+    <div className="lab-page">
       <h1 className="sr-only">Autoresearch Lab</h1>
       <section className="lab-composer-section">
         <GpuLineBackdrop utilization={telemetry?.utilization ?? null} />
@@ -228,6 +290,15 @@ export function LabView() {
               }
             }}
             placeholder="What do you want to research?"
+          />
+          <ResearcherModelSelect
+            id="lab-researcher-model"
+            models={researcherModels}
+            value={selectedResearcherModel}
+            loading={researcherModelsLoading}
+            error={researcherModelError}
+            compact
+            onChange={setSelectedResearcherModel}
           />
           <button className="composer-send" type="submit" aria-label="Configure research" disabled={prompt.trim().length < 3}>
             <ArrowUp size={17} strokeWidth={2} />
@@ -268,7 +339,7 @@ export function LabView() {
                     onChange={() => chooseResearchType("local_model_benchmark")}
                   />
                   <Gauge size={16} aria-hidden="true" />
-                  <span><strong>Local model benchmark</strong><small>Measure a real installed Ollama model.</small></span>
+                  <span><strong>Local model benchmark</strong><small>Measure an Ollama or pinned Hugging Face model.</small></span>
                 </label>
               </fieldset>
 
@@ -300,33 +371,75 @@ export function LabView() {
 
                 {researchType === "local_model_benchmark" ? (
                   <label>
-                    <span>Installed model</span>
+                    <span>Model under test</span>
                     <select
                       value={selectedModel}
                       disabled={modelsLoading || !models.length}
                       onChange={(event) => setSelectedModel(event.target.value)}
                     >
-                      {modelsLoading ? <option value="">Reading Ollama models…</option> : null}
+                      {modelsLoading ? <option value="">Reading model catalog…</option> : null}
                       {!modelsLoading && !models.length ? <option value="">No compatible models found</option> : null}
                       {models.map((model) => <option value={model.id} key={model.id}>{modelOption(model)}</option>)}
                     </select>
-                    <small className="launch-field-note">Four repeatable profiles; speed is measured in output tokens per second.</small>
+                    <small className="launch-field-note">Provider and pinned model revision are recorded; speed is measured in output tokens per second.</small>
                     {modelError ? <small className="launch-field-error" role="alert">{modelError}</small> : null}
                   </label>
                 ) : null}
 
                 <label className="allocation-control">
-                  <span>GPU scheduling share <strong>{allocation}%</strong></span>
-                  <input type="range" min={10} max={100} step={5} value={allocation} onChange={(event) => setAllocation(Number(event.target.value))} />
-                  <small>{allocation}% requests this scheduling share while a GPU test is running.</small>
+                  <span>GPU scheduling share <strong>{effectiveAllocation}%</strong></span>
+                  <input
+                    type="range"
+                    min={10}
+                    max={100}
+                    step={5}
+                    value={effectiveAllocation}
+                    disabled={requiresFullGpu}
+                    onChange={(event) => setAllocation(Number(event.target.value))}
+                  />
+                  <small>
+                    {requiresFullGpu
+                      ? "The pinned Hugging Face benchmark reserves the full scheduler share."
+                      : `${effectiveAllocation}% requests this scheduling share while a GPU test is running.`}
+                  </small>
                 </label>
+
+                <div className="schedule-window-control">
+                  <span className="schedule-window-heading">
+                    <CalendarClock size={14} aria-hidden="true" />
+                    <input
+                      type="checkbox"
+                      checked={scheduleEnabled}
+                      onChange={(event) => setScheduleEnabled(event.target.checked)}
+                    />
+                    Run in a time window
+                  </span>
+                  {scheduleEnabled ? (
+                    <span className="schedule-time-inputs">
+                      <input aria-label="Schedule start time" type="time" value={scheduleStart} onChange={(event) => setScheduleStart(event.target.value)} />
+                      <i aria-hidden="true">to</i>
+                      <input aria-label="Schedule end time" type="time" value={scheduleEnd} onChange={(event) => setScheduleEnd(event.target.value)} />
+                    </span>
+                  ) : null}
+                  <small className={scheduleInvalid ? "launch-field-error" : undefined}>
+                    {scheduleInvalid
+                      ? "Choose two different times."
+                      : scheduleEnabled
+                        ? "The queued run starts only inside this daily local-time window."
+                        : "Optional: keep heavy local work for quieter hours."}
+                  </small>
+                </div>
               </div>
+
+              {researcherModels.find((model) => model.id === selectedResearcherModel)?.provider === "ollama" ? (
+                <p className="launch-resource-note">Local research agents share this computer&apos;s RAM, CPU and GPU. Large models can make the desktop less responsive; use the time window for unattended runs.</p>
+              ) : null}
 
               <div className="launch-actions">
                 <button
                   className="queue-button"
                   type="button"
-                  disabled={launching != null || !selectedSource || (researchType === "local_model_benchmark" && !selectedModel)}
+                  disabled={scheduleInvalid || launching != null || !selectedSource || !selectedResearcherModel || (researchType === "local_model_benchmark" && !selectedModel)}
                   onClick={() => void launch(false)}
                 >
                   {launching === "queue" ? <LoaderCircle className="spin" size={16} /> : <ListPlus size={16} />}
@@ -335,22 +448,20 @@ export function LabView() {
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={launching != null || !selectedSource || (researchType === "local_model_benchmark" && !selectedModel)}
+                  disabled={scheduleInvalid || launching != null || !selectedSource || !selectedResearcherModel || (researchType === "local_model_benchmark" && !selectedModel)}
                   onClick={() => void launch(true)}
                 >
                   {launching === "run" ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}
-                  Run now
+                  {scheduleEnabled ? "Schedule" : "Run now"}
                 </button>
               </div>
             </motion.div>
           ) : null}
         </AnimatePresence>
 
-        {error ? <p className="inline-error lab-error" role="alert">{error}</p> : null}
-        {notice ? <p className="launch-notice" role="status">{notice}</p> : null}
-
+        {error || researcherModelError ? <p className="inline-error lab-error" role="alert">{error ?? researcherModelError}</p> : null}
         <AnimatePresence initial={false}>
-          {!prompt.trim() && !pendingPrompt && !activeResearch ? (
+          {!prompt.trim() && !pendingPrompt ? (
             <motion.div
               className="recent-researches"
               initial={{ opacity: 0, y: 8 }}
@@ -366,8 +477,8 @@ export function LabView() {
                   <StatusPill status={research.status} queuePosition={research.queue_position} />
                   <span>
                     {research.status === "queued"
-                      ? `${modelName(research.model_id) ?? "Training run"} · waiting for GPU`
-                      : `${research.experiment_count ?? research.experiments?.length ?? 0} experiments${research.best_value != null ? ` · ${metricLabel(research.metric_name)} ${formatMetric(research.best_value)}` : ""}`}
+                      ? `${modelDisplayName(research.model_id) ?? "Training run"} · waiting for GPU`
+                      : `${research.experiment_count ?? research.experiments?.length ?? 0} experiments · ${formatTokenCount(research.total_tokens)} agent tokens${research.best_value != null ? ` · ${metricLabel(research.metric_name)} ${formatMetric(research.best_value)}` : ""}`}
                   </span>
                   <ChevronRight size={15} aria-hidden="true" />
                 </Link>
@@ -377,11 +488,14 @@ export function LabView() {
             </motion.div>
           ) : null}
         </AnimatePresence>
+        {!loading && !prompt.trim() && !pendingPrompt ? (
+          <LabTotalTokenUsage value={totalTokenUsage} input={totalInputTokens} output={totalOutputTokens} />
+        ) : null}
       </section>
 
-      {activeResearch ? (
-        <div ref={liveRef} className="active-research-section">
-          <ResearchLiveView researchId={activeResearch.id} initialResearch={activeResearch} />
+      {fullscreen && monitorResearch ? (
+        <div className="lab-fullscreen-monitor">
+          <ResearchLiveView researchId={monitorResearch.id} initialResearch={monitorResearch} />
         </div>
       ) : null}
     </div>

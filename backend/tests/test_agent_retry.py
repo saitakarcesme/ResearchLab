@@ -66,6 +66,42 @@ def test_candidate_command_overrides_personal_reasoning_effort(tmp_path: Path) -
     assert command[:2] == ["codex", "exec"]
 
 
+def test_candidate_command_uses_the_persisted_researcher_model(tmp_path: Path) -> None:
+    adapter = object.__new__(KarpathyAutoresearchAdapter)
+    adapter.settings = SimpleNamespace(
+        codex_binary="codex",
+        agent_reasoning_effort="high",
+        default_researcher_model="gpt-default",
+    )
+    adapter.context = SimpleNamespace(
+        research={"researcher_model_id": "gpt-selected"}
+    )
+    command = adapter._agent_command(tmp_path / "scratch", tmp_path / "result.json")
+    assert command[:4] == ["codex", "--model", "gpt-selected", "exec"]
+
+
+def test_candidate_command_supports_a_local_ollama_researcher(tmp_path: Path) -> None:
+    adapter = object.__new__(KarpathyAutoresearchAdapter)
+    adapter.settings = SimpleNamespace(
+        codex_binary="codex",
+        agent_reasoning_effort="high",
+        default_researcher_model="gpt-default",
+    )
+    adapter.context = SimpleNamespace(
+        research={"researcher_model_id": "ollama:qwen3:4b"}
+    )
+    command = adapter._agent_command(tmp_path / "scratch", tmp_path / "result.json")
+    assert command[:7] == [
+        "codex",
+        "--oss",
+        "--local-provider",
+        "ollama",
+        "--model",
+        "qwen3:4b",
+        "exec",
+    ]
+
+
 def test_agent_timeout_records_attempt_and_waits_stop_aware() -> None:
     adapter = object.__new__(KarpathyAutoresearchAdapter)
     database = RecordingDatabase()

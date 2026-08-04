@@ -35,6 +35,14 @@ Open `http://localhost:3000/lab`. Omit `-EnableExecution` when you only want to
 inspect the UI, SQLite persistence, and real GPU telemetry without allowing
 Codex or training subprocesses to start.
 
+Lab runs measurable GPU experiments and model benchmarks. The selected
+research agent is persisted separately from the model being benchmarked.
+
+Research-agent choices can be configured with
+`AUTORESEARCH_RESEARCHER_MODELS` (a comma-separated allowlist) and
+`AUTORESEARCH_DEFAULT_RESEARCHER_MODEL`. The default catalog contains
+`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.3-codex-spark`.
+
 The first real research start clones upstream commit
 `228791fb499afffb54b46200aca536f79142f117`, prepares its environment and data,
 then runs the fixed five-minute `val_bpb` baseline. Each research continues

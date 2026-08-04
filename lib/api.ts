@@ -5,6 +5,7 @@ import type {
   GpuTelemetry,
   LocalModelCatalog,
   Research,
+  ResearcherModelCatalog,
   ResearchType,
 } from "./types";
 
@@ -118,8 +119,18 @@ export async function listResearches(): Promise<Research[]> {
   return values.map(normalizeResearch);
 }
 
+export function listResearcherModels(): Promise<ResearcherModelCatalog> {
+  return request("/api/researcher-models");
+}
+
 export async function getResearch(id: string): Promise<Research> {
   return normalizeResearch(await request<ResearchPayload>(`/api/researches/${encodeURIComponent(id)}`));
+}
+
+export function deleteResearch(id: string): Promise<void> {
+  return request(`/api/researches/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function createResearch(input: {
@@ -128,8 +139,13 @@ export async function createResearch(input: {
   target_gpu_allocation: number;
   auto_start: boolean;
   research_type: ResearchType;
+  researcher_model_id: string;
   model_id?: string;
   benchmark_profile?: BenchmarkProfile;
+  schedule_start_time?: string;
+  schedule_end_time?: string;
+  schedule_timezone?: string;
+  schedule_utc_offset_minutes?: number;
 }): Promise<Research> {
   return normalizeResearch(await request<ResearchPayload>("/api/researches", {
     method: "POST",

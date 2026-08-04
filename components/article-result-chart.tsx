@@ -83,34 +83,34 @@ export function ArticleResultChart({ article }: { article: Article }) {
           <AreaChart data={points} margin={{ top: 12, right: 8, bottom: 0, left: -8 }}>
             <defs>
               <linearGradient id="articleImprovementFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#d77ab4" stopOpacity={0.28} />
-                <stop offset="100%" stopColor="#d77ab4" stopOpacity={0.02} />
+                <stop offset="0%" stopColor="#d0d0d0" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="#d0d0d0" stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} stroke="rgba(255,255,255,.055)" />
+            <CartesianGrid vertical={false} stroke="rgba(255, 255, 255,.055)" />
             <XAxis
               dataKey="experiment"
               axisLine={false}
               tickLine={false}
-              tick={{ fill: "#858087", fontSize: 10 }}
+              tick={{ fill: "#b8b8b8", fontSize: 10 }}
               tickFormatter={(value) => value === 0 ? "Start" : String(value)}
               minTickGap={20}
             />
             <YAxis
               axisLine={false}
               tickLine={false}
-              tick={{ fill: "#858087", fontSize: 10 }}
+              tick={{ fill: "#b8b8b8", fontSize: 10 }}
               tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
               width={44}
               domain={[0, "auto"]}
             />
             <Tooltip
-              cursor={{ stroke: "rgba(255,255,255,.12)", strokeDasharray: "3 5" }}
+              cursor={{ stroke: "rgba(255, 255, 255,.12)", strokeDasharray: "3 5" }}
               contentStyle={{
-                background: "rgba(18,16,21,.96)",
-                border: "1px solid rgba(255,255,255,.08)",
+                background: "rgba(17, 17, 17,.96)",
+                border: "1px solid rgba(255, 255, 255,.08)",
                 borderRadius: 10,
-                color: "#eee9e1",
+                color: "#b8b8b8",
                 fontFamily: "var(--font-geist-sans), Arial, sans-serif",
                 fontSize: 11,
               }}
@@ -120,11 +120,11 @@ export function ArticleResultChart({ article }: { article: Article }) {
             <Area
               type="monotone"
               dataKey="improvement"
-              stroke="#e08abc"
+              stroke="#e8e8e8"
               strokeWidth={2.2}
               fill="url(#articleImprovementFill)"
               dot={false}
-              activeDot={{ r: 4, fill: "#f2a7cf", stroke: "#fff", strokeWidth: 1 }}
+              activeDot={{ r: 4, fill: "#b8b8b8", stroke: "#b8b8b8", strokeWidth: 1 }}
               isAnimationActive={!reduceMotion}
               animationDuration={450}
             />

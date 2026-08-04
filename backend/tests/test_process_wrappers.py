@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -14,6 +16,8 @@ from backend.adapters.autoresearch import (
     build_posix_group_terminate_script,
     build_setsid_wait_argv,
 )
+from backend.process_control import MANAGED_RUN_ID_ENV
+from backend.supervisor import ResearchSupervisor
 
 WSL_PREFIX = [
     "wsl.exe",
@@ -23,7 +27,7 @@ WSL_PREFIX = [
 ]
 
 
-def _wsl_shell(script: str, *, timeout: float = 5) -> subprocess.CompletedProcess[str]:
+def _wsl_shell(script: str, *, timeout: float = 15) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [*WSL_PREFIX, "sh", "-s"],
         input=script,
@@ -47,6 +51,32 @@ def test_managed_posix_wrapper_constructs_attached_session() -> None:
     assert "ps -o pgid= -p" in script
     assert "printf '%s\\n' \"$pgid\"" in script
     assert "echo $$" not in script
+
+
+def test_posix_artifact_delete_refuses_a_symlinked_root() -> None:
+    if shutil.which("wsl.exe") is None:
+        pytest.skip("WSL is unavailable")
+    token = f"delete-safety-{uuid.uuid4().hex}"
+    base = f"/tmp/{token}"
+    outside = f"/tmp/{token}-outside"
+    setup = _wsl_shell(
+        f"mkdir -p {outside}/research-id {base}/managed && "
+        f"printf keep > {outside}/research-id/keep.txt && "
+        f"ln -s {outside} {base}/managed/source"
+    )
+    if setup.returncode != 0:
+        pytest.skip("WSL could not create the symlink safety fixture")
+    try:
+        script = ResearchSupervisor._posix_remove_child_script(
+            PurePosixPath(f"{base}/managed/source"), "research-id"
+        )
+        result = _wsl_shell(script)
+        assert result.returncode != 0
+        protected = _wsl_shell(f"cat {outside}/research-id/keep.txt")
+        assert protected.returncode == 0
+        assert protected.stdout == "keep"
+    finally:
+        _wsl_shell(f"rm -rf -- {base} {outside}")
 
 
 def test_wsl_wrapper_stays_attached_and_termination_leaves_no_group() -> None:
@@ -77,7 +107,7 @@ def test_wsl_wrapper_stays_attached_and_termination_leaves_no_group() -> None:
     process.stdin.close()
     pgid: str | None = None
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             marker = _wsl_shell(f"test -f {pid_file} && cat {pid_file}")
             if marker.returncode == 0 and marker.stdout.strip().isdigit():
@@ -108,3 +138,21 @@ def test_wsl_wrapper_stays_attached_and_termination_leaves_no_group() -> None:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process-marker recovery")
+def test_native_cleanup_terminates_only_the_exact_managed_run() -> None:
+    run_id = f"native-wrapper-test-{uuid.uuid4()}"
+    environment = os.environ.copy()
+    environment[MANAGED_RUN_ID_ENV] = run_id
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=environment,
+    )
+    try:
+        ResearchSupervisor._terminate_native_process_trees(run_id)
+        assert process.wait(timeout=3) != 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)

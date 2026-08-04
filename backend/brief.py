@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.config import Settings
+from backend.codex_usage import CodexTokenUsage, parse_codex_jsonl_usage
+from backend.researcher_models import researcher_model_command_args
 
 
 def concise_title(prompt: str) -> str:
@@ -36,6 +38,7 @@ class ResearchBrief:
     objective: str
     used_ai: bool
     warning: str | None = None
+    usage: CodexTokenUsage = CodexTokenUsage()
 
 
 def validate_brief_payload(payload: Any) -> tuple[str, str]:
@@ -76,6 +79,7 @@ class CodexResearchBriefGenerator:
         *,
         supplied_title: str | None = None,
         supplied_objective: str | None = None,
+        researcher_model_id: str | None = None,
     ) -> ResearchBrief:
         if supplied_title and supplied_objective:
             return self._fallback(prompt, supplied_title, supplied_objective, None)
@@ -102,7 +106,11 @@ Request JSON:
 """
         command = [
             self.settings.codex_binary,
+            *researcher_model_command_args(
+                researcher_model_id or self.settings.default_researcher_model
+            ),
             "exec",
+            "--json",
             "--ephemeral",
             "--sandbox",
             "read-only",
@@ -130,10 +138,14 @@ Request JSON:
                 raise RuntimeError(f"Codex exited with status {result.returncode}")
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             generated_title, generated_objective = validate_brief_payload(payload)
+            usage = parse_codex_jsonl_usage(
+                log_path.read_text(encoding="utf-8", errors="replace")
+            )
             return ResearchBrief(
                 title=supplied_title or generated_title,
                 objective=supplied_objective or generated_objective,
                 used_ai=True,
+                usage=usage,
             )
         except (
             OSError,

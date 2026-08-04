@@ -67,9 +67,9 @@ export function GpuLineBackdrop({ utilization }: { utilization: number | null })
       <svg viewBox="0 0 1000 300" preserveAspectRatio="none">
         <defs>
           <linearGradient id="ambientGpuStroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#b77bff" stopOpacity={0.68} />
-            <stop offset="50%" stopColor="#ff82c8" stopOpacity={1} />
-            <stop offset="100%" stopColor="#a879ff" stopOpacity={0.72} />
+            <stop offset="0%" stopColor="#888888" stopOpacity={0.68} />
+            <stop offset="50%" stopColor="#ffffff" stopOpacity={1} />
+            <stop offset="100%" stopColor="#a8a8a8" stopOpacity={0.72} />
           </linearGradient>
         </defs>
         <motion.path
@@ -77,7 +77,7 @@ export function GpuLineBackdrop({ utilization }: { utilization: number | null })
           animate={{ d: path }}
           transition={transition}
           fill="none"
-          stroke="#f16ebc"
+          stroke="#ffffff"
           strokeWidth={26}
           strokeOpacity={0.1}
           strokeLinecap="round"
@@ -113,7 +113,7 @@ export function GpuLineBackdrop({ utilization }: { utilization: number | null })
           animate={{ d: path }}
           transition={transition}
           fill="none"
-          stroke="rgba(255, 208, 239, 0.42)"
+          stroke="rgba(220, 220, 220, 0.42)"
           strokeWidth={1.25}
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"

@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import ClassVar
 
 from fastapi.testclient import TestClient
@@ -164,6 +165,30 @@ def test_mps_scheduler_respects_sum_of_target_allocations(settings) -> None:
         supervisor.shutdown()
 
 
+def test_daily_schedule_supports_daytime_and_overnight_windows() -> None:
+    daytime = {
+        "schedule_start_time": "09:00",
+        "schedule_end_time": "17:00",
+        "schedule_timezone": "UTC",
+        "schedule_utc_offset_minutes": 0,
+    }
+    overnight = {
+        "schedule_start_time": "22:00",
+        "schedule_end_time": "07:00",
+        "schedule_timezone": "UTC",
+        "schedule_utc_offset_minutes": 0,
+    }
+    noon = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    late = datetime(2026, 1, 2, 23, 0, tzinfo=timezone.utc)
+    early = datetime(2026, 1, 2, 6, 30, tzinfo=timezone.utc)
+
+    assert ResearchSupervisor._schedule_is_open(daytime, noon)
+    assert not ResearchSupervisor._schedule_is_open(daytime, late)
+    assert ResearchSupervisor._schedule_is_open(overnight, late)
+    assert ResearchSupervisor._schedule_is_open(overnight, early)
+    assert not ResearchSupervisor._schedule_is_open(overnight, noon)
+
+
 def test_paused_research_reserves_gpu_across_supervisor_restart(settings) -> None:
     QueueWaitingAdapter.started = []
     database = Database(settings.database_path)
@@ -210,6 +235,22 @@ def test_research_api_queues_by_default_and_supports_queue_controls(
         research_id = created.json()["id"]
         assert created.json()["status"] == "queued"
         assert created.json()["queue_position"] == 1
+
+        scheduled = client.post(
+            "/api/researches",
+            json={
+                **payload,
+                "title": "Scheduled overnight",
+                "auto_start": True,
+                "schedule_start_time": "22:00",
+                "schedule_end_time": "07:00",
+                "schedule_timezone": "UTC",
+                "schedule_utc_offset_minutes": 0,
+            },
+        )
+        assert scheduled.status_code == 201
+        assert scheduled.json()["status"] == "queued"
+        assert scheduled.json()["schedule_start_time"] == "22:00"
 
         listing = client.get("/api/researches/queue")
         assert listing.status_code == 200

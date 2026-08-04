@@ -8,14 +8,36 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from backend.adapters.base import AdapterContext, ResearchAdapter
-from backend.process_control import ProcessResult, run_managed_process
+from backend.adapters.base import AdapterContext, ResearchAdapter, ResearchFailed
+from backend.codex_usage import parse_codex_jsonl_usage
+from backend.local_models import OllamaClient, model_name_from_id
+from backend.process_control import (
+    MANAGED_RUN_ID_ENV,
+    ProcessResult,
+    run_managed_process,
+)
+from backend.researcher_models import researcher_model_command_args
 from backend.telemetry import SSHCommandRunner
+
+LIVE_TOKEN_STEP_PATTERN = re.compile(
+    r"step\s+\d+.*?\|\s*dt:\s*([\d,]+)ms\s*\|\s*tok/sec:\s*([\d,]+)",
+    re.IGNORECASE,
+)
+
+
+def live_tokens_from_output(text: str) -> int:
+    """Count tokens completed by the step lines already flushed by train.py."""
+
+    return sum(
+        round(int(milliseconds.replace(",", "")) * int(rate.replace(",", "")) / 1000)
+        for milliseconds, rate in LIVE_TOKEN_STEP_PATTERN.findall(text)
+    )
 
 FLOAT_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 VAL_BPB_PATTERN = re.compile(rf"^val_bpb:\s*({FLOAT_PATTERN})\s*$", re.MULTILINE)
@@ -206,7 +228,7 @@ def _windows_to_wsl(path: Path) -> str:
     return f"/mnt/{drive}{remainder}"
 
 
-RUN_ID_ENV = "AUTORESEARCH_RUN_ID"
+RUN_ID_ENV = MANAGED_RUN_ID_ENV
 
 
 def build_managed_posix_script(pid_file: str, body: str) -> str:
@@ -295,6 +317,7 @@ class KarpathyAutoresearchAdapter(ResearchAdapter):
         self.research_log_dir.mkdir(parents=True, exist_ok=True)
         self.prepare_hash: str | None = None
         self._agent_failure_streak = 0
+        self._evaluation_failure_streak = 0
 
     def _git(
         self, *args: str, cwd: Path | None = None, check: bool = True
@@ -601,6 +624,12 @@ class KarpathyAutoresearchAdapter(ResearchAdapter):
             resume_callback=resume_callback,
             terminate_callback=terminate_callback,
         )
+        if result.control_error:
+            self.context.runtime.control_error = result.control_error
+            raise ResearchFailed(
+                f"{name} process termination could not be confirmed: "
+                f"{result.control_error}"
+            )
         if result.stopped:
             raise InterruptedError("research stopped")
         if result.timed_out or result.returncode != 0:
@@ -804,9 +833,18 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
 
     def _agent_command(self, scratch: Path, output_json: Path) -> list[str]:
         schema = Path(__file__).resolve().parents[1] / "agent-output.schema.json"
-        return [
-            self.settings.codex_binary,
+        context = getattr(self, "context", None)
+        research = getattr(context, "research", {})
+        researcher_model = str(
+            research.get("researcher_model_id")
+            or getattr(self.settings, "default_researcher_model", "")
+        ).strip()
+        command = [self.settings.codex_binary]
+        if researcher_model:
+            command.extend(researcher_model_command_args(researcher_model))
+        command.extend([
             "exec",
+            "--json",
             "--ephemeral",
             "--config",
             f'model_reasoning_effort="{self.settings.agent_reasoning_effort}"',
@@ -819,7 +857,30 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
             "--output-last-message",
             str(output_json),
             "-",
-        ]
+        ])
+        return command
+
+    def _release_local_researcher(self) -> None:
+        model_id = str(self.context.research.get("researcher_model_id") or "")
+        if not model_id.startswith("ollama:"):
+            return
+        model_name = model_name_from_id(model_id)
+        client = OllamaClient()
+        client.unload(model_name)
+        running_names = {
+            str(item.get("name") or item.get("model") or "")
+            for item in client.running_models()
+        }
+        if model_name in running_names:
+            raise RuntimeError(
+                "The local research agent is still using GPU memory, so the measured training run was not started."
+            )
+        self.db.add_log(
+            self.research_id,
+            "local_researcher_released",
+            f"Released {model_name} before the measured GPU run.",
+            data={"researcher_model_id": model_id},
+        )
 
     def _run_agent(
         self, experiment_number: int, base_sha: str, attempt_number: int
@@ -865,6 +926,27 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 runtime=self.context.runtime,
                 stdin_text=self._agent_prompt(),
             )
+            usage = parse_codex_jsonl_usage(
+                output_log.read_text(encoding="utf-8", errors="replace")
+                if output_log.exists()
+                else ""
+            )
+            if usage.has_usage:
+                self.db.record_codex_token_usage(
+                    self.research_id,
+                    "candidate",
+                    call_id=f"{self.research_id}:{stem}",
+                    input_tokens=usage.input_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    output_tokens=usage.output_tokens,
+                    reasoning_output_tokens=usage.reasoning_output_tokens,
+                )
+            if result.control_error:
+                self.context.runtime.control_error = result.control_error
+                raise ResearchFailed(
+                    "Candidate process termination could not be confirmed: "
+                    f"{result.control_error}"
+                )
             if result.stopped:
                 raise InterruptedError("research stopped")
             if result.timed_out:
@@ -910,23 +992,30 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
             shutil.copyfile(candidate, self.workspace / "train.py")
             return payload
         finally:
-            with self.context.repository_lock:
-                self._git(
-                    "worktree",
-                    "remove",
-                    "--force",
-                    str(scratch),
-                    cwd=self.settings.upstream_cache_dir,
-                    check=False,
-                )
-                self._git(
-                    "worktree",
-                    "prune",
-                    cwd=self.settings.upstream_cache_dir,
-                    check=False,
-                )
-            if scratch.exists():
-                shutil.rmtree(scratch)
+            try:
+                with self.context.repository_lock:
+                    self._git(
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(scratch),
+                        cwd=self.settings.upstream_cache_dir,
+                        check=False,
+                    )
+                    self._git(
+                        "worktree",
+                        "prune",
+                        cwd=self.settings.upstream_cache_dir,
+                        check=False,
+                    )
+                if scratch.exists():
+                    shutil.rmtree(scratch)
+            except Exception:
+                # A cleanup failure must never mask an unconfirmed process-group
+                # termination. The supervisor keeps the GPU reserved when this
+                # control error reaches the worker boundary.
+                if not self.context.runtime.control_error:
+                    raise
 
     def _validate_candidate_diff(self, workspace: Path) -> None:
         if (
@@ -1078,8 +1167,30 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
         if result.returncode != 0:
             raise RuntimeError("WSL process-group termination failed")
 
-    def _run_evaluation(self, experiment_number: int) -> tuple[ProcessResult, Path]:
+    def _watch_evaluation_tokens(
+        self, output: Path, experiment_id: str, stopped: threading.Event
+    ) -> None:
+        existing = self.db.get_experiment(experiment_id) or {}
+        starting_tokens = max(0, int(existing.get("token_count") or 0))
+        last_value = starting_tokens
+        while True:
+            if output.exists():
+                try:
+                    text = output.read_text(encoding="utf-8", errors="replace")
+                    current = starting_tokens + live_tokens_from_output(text)
+                    if current > last_value:
+                        self.db.update_experiment_token_count(experiment_id, current)
+                        last_value = current
+                except OSError:
+                    pass
+            if stopped.wait(0.75):
+                return
+
+    def _run_evaluation(
+        self, experiment_number: int, experiment_id: str
+    ) -> tuple[ProcessResult, Path]:
         output = self.research_log_dir / f"experiment-{experiment_number}.log"
+        output.unlink(missing_ok=True)
         env = self._evaluation_env()
         pause_callback = resume_callback = terminate_callback = None
         stdin_text: str | None = None
@@ -1140,18 +1251,30 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
             cwd = None
         else:
             command = [self.settings.uv_binary, "run", "train.py"]
-        result = run_managed_process(
-            command,
-            cwd=cwd,
-            env=env,
-            output=output,
-            timeout_seconds=self.settings.experiment_timeout_seconds,
-            runtime=self.context.runtime,
-            stdin_text=stdin_text,
-            pause_callback=pause_callback,
-            resume_callback=resume_callback,
-            terminate_callback=terminate_callback,
+        token_watch_stopped = threading.Event()
+        token_watcher = threading.Thread(
+            target=self._watch_evaluation_tokens,
+            args=(output, experiment_id, token_watch_stopped),
+            name=f"token-watch-{experiment_number}",
+            daemon=True,
         )
+        token_watcher.start()
+        try:
+            result = run_managed_process(
+                command,
+                cwd=cwd,
+                env=env,
+                output=output,
+                timeout_seconds=self.settings.experiment_timeout_seconds,
+                runtime=self.context.runtime,
+                stdin_text=stdin_text,
+                pause_callback=pause_callback,
+                resume_callback=resume_callback,
+                terminate_callback=terminate_callback,
+            )
+        finally:
+            token_watch_stopped.set()
+            token_watcher.join(timeout=2)
         return result, output
 
     def _reduce_for_oom(self) -> str | None:
@@ -1315,10 +1438,18 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                     experiment_number, str(base_sha), attempt_number
                 )
                 self._validate_candidate_diff(self.workspace)
+                self._release_local_researcher()
             except InterruptedError:
                 self._clean_candidate(base_sha)
                 self.context.runtime.set_phase("stopping")
                 return
+            except ResearchFailed:
+                try:
+                    self._clean_candidate(base_sha)
+                except Exception:
+                    if not self.context.runtime.control_error:
+                        raise
+                raise
             except Exception as exc:  # noqa: BLE001 - candidate failures are persisted and the worktree is restored
                 self._clean_candidate(base_sha)
                 self._record_agent_failure(
@@ -1401,8 +1532,32 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 self._assert_prepare_unchanged()
                 evaluation_state = self._capture_evaluation_state()
                 evaluation, output_path = self._run_evaluation(
-                    experiment["experiment_number"]
+                    experiment["experiment_number"], experiment_id
                 )
+                if evaluation.control_error:
+                    self.context.runtime.control_error = evaluation.control_error
+                    message = (
+                        "GPU evaluation process termination could not be confirmed: "
+                        f"{evaluation.control_error}"
+                    )
+                    persistence_errors: list[str] = []
+                    try:
+                        self._clean_candidate(base_sha)
+                    except Exception as exc:  # noqa: BLE001 - fail-safe cleanup is best effort
+                        persistence_errors.append(f"candidate cleanup failed: {exc}")
+                    try:
+                        self.db.finish_experiment(
+                            experiment_id,
+                            metric_value=None,
+                            accepted=False,
+                            git_commit=candidate_sha,
+                            error=message,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - preserve the terminal control error
+                        persistence_errors.append(f"result persistence failed: {exc}")
+                    if persistence_errors:
+                        message += ". " + "; ".join(persistence_errors)
+                    raise ResearchFailed(message)
                 self._verify_evaluation_state(evaluation_state)
                 output_text = (
                     output_path.read_text(encoding="utf-8", errors="replace")
@@ -1440,6 +1595,8 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                         )
                         continue
                 break
+        except ResearchFailed:
+            raise
         except Exception as exc:  # noqa: BLE001 - execution boundary must convert all failures to experiment records
             execution_error = str(exc)
         finally:
@@ -1490,10 +1647,29 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 level="error",
                 experiment_id=experiment_id,
             )
+            self._evaluation_failure_streak += 1
+            non_recoverable_environment_error = any(
+                marker in error
+                for marker in (
+                    "Cannot install kernel from repo kernels-community/flash-attn3",
+                    "does not have one of build variants",
+                )
+            )
+            if non_recoverable_environment_error:
+                raise ResearchFailed(
+                    "The pinned Flash Attention GPU kernel is unavailable in this Windows runtime. "
+                    "Run this training research through the configured WSL GPU runtime."
+                )
+            if self._evaluation_failure_streak >= 3:
+                raise ResearchFailed(
+                    "Three consecutive GPU evaluations failed before producing a metric. "
+                    "The research was stopped to prevent an endless retry loop."
+                )
             self.context.runtime.set_phase("ready")
             return
 
         assert metric is not None and summary is not None
+        self._evaluation_failure_streak = 0
         accepted = is_better(metric, best, str(research["metric_direction"]))
         if safety_changes:
             candidate_sha = self._commit("", amend=True)
@@ -1510,6 +1686,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 accepted=True,
                 git_commit=candidate_sha,
                 error=None,
+                token_count=round(summary.total_tokens_m * 1_000_000),
                 research_updates=updates,
             )
             try:
@@ -1535,6 +1712,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 accepted=False,
                 git_commit=candidate_sha,
                 error=None,
+                token_count=round(summary.total_tokens_m * 1_000_000),
             )
             message = f"Experiment {experiment['experiment_number']} rejected at {metric:.6f}; best remains {best:.6f}."
             event_type = "experiment_rejected"

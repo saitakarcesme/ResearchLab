@@ -1,23 +1,29 @@
 "use client";
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { BookOpen, FlaskConical, Microscope, Settings, X } from "lucide-react";
+import { BookOpen, FlaskConical, Maximize2, Microscope, Minimize2, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingsPanel } from "./settings-panel";
 
 const navigation = [
-  { href: "/lab", label: "Lab", icon: FlaskConical },
-  { href: "/researches", label: "Researches", icon: Microscope },
-  { href: "/articles", label: "Articles", icon: BookOpen },
-];
+  { href: "/lab", label: "Lab", icon: FlaskConical, match: "prefix" },
+  { href: "/researches", label: "Researches", icon: Microscope, match: "prefix" },
+  { href: "/articles", label: "Articles", icon: BookOpen, match: "prefix" },
+] as const;
+
+function isNavigationActive(pathname: string, item: (typeof navigation)[number]): boolean {
+  return pathname === item.href || pathname.startsWith(`${item.href}/`);
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   useEffect(() => {
@@ -63,13 +69,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [closeSettings, settingsOpen]);
 
+  useEffect(() => {
+    const syncFullscreenState = () => setFullscreen(document.fullscreenElement === mainRef.current);
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await mainRef.current?.requestFullscreen();
+    } catch {
+      setFullscreen(false);
+    }
+  }, []);
+
   return (
     <MotionConfig reducedMotion="user">
       <div className="app-shell">
         <div className="app-background" inert={settingsOpen ? true : undefined} aria-hidden={settingsOpen || undefined}>
         <nav className="floating-nav" aria-label="Primary navigation">
-          {navigation.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href || pathname.startsWith(`${href}/`);
+          {navigation.map((item) => {
+            const { href, label, icon: Icon } = item;
+            const active = isNavigationActive(pathname, item);
             return (
               <Link
                 href={href}
@@ -95,7 +120,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Settings size={18} strokeWidth={1.8} />
         </button>
 
-        <main className="app-main">{children}</main>
+        <main ref={mainRef} className={`app-main ${fullscreen ? "app-main-fullscreen" : ""}`}>
+          {children}
+          <button
+            className="fullscreen-trigger"
+            type="button"
+            aria-label={fullscreen ? "Exit fullscreen monitoring" : "Open fullscreen monitoring"}
+            title={fullscreen ? "Exit fullscreen" : "Fullscreen monitoring"}
+            onClick={() => void toggleFullscreen()}
+          >
+            {fullscreen ? <Minimize2 size={17} aria-hidden="true" /> : <Maximize2 size={17} aria-hidden="true" />}
+          </button>
+        </main>
         </div>
 
         <AnimatePresence>

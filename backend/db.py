@@ -139,6 +139,11 @@ CREATE TABLE IF NOT EXISTS researches (
     model_digest TEXT,
     model_runtime TEXT,
     benchmark_profile TEXT,
+    researcher_model_id TEXT,
+    schedule_start_time TEXT,
+    schedule_end_time TEXT,
+    schedule_timezone TEXT,
+    schedule_utc_offset_minutes INTEGER,
     queued_at TEXT,
     queue_order INTEGER,
     created_at TEXT NOT NULL,
@@ -158,6 +163,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     completed_at TEXT,
     git_commit TEXT,
     error TEXT,
+    token_count INTEGER NOT NULL DEFAULT 0,
     UNIQUE(research_id, experiment_number)
 );
 
@@ -169,6 +175,18 @@ CREATE TABLE IF NOT EXISTS research_logs (
     event_type TEXT NOT NULL,
     message TEXT NOT NULL,
     data_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS research_token_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    research_id TEXT NOT NULL REFERENCES researches(id) ON DELETE CASCADE,
+    call_id TEXT NOT NULL UNIQUE,
+    phase TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -184,6 +202,7 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE INDEX IF NOT EXISTS idx_researches_status ON researches(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_experiments_research ON experiments(research_id, experiment_number);
 CREATE INDEX IF NOT EXISTS idx_logs_research ON research_logs(research_id, id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_research ON research_token_usage(research_id, id);
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 """
 
@@ -266,16 +285,101 @@ class Database:
                 "model_digest": "TEXT",
                 "model_runtime": "TEXT",
                 "benchmark_profile": "TEXT",
+                "researcher_model_id": "TEXT",
+                "schedule_start_time": "TEXT",
+                "schedule_end_time": "TEXT",
+                "schedule_timezone": "TEXT",
+                "schedule_utc_offset_minutes": "INTEGER",
             }
             for column, definition in model_columns.items():
                 if column not in research_columns:
                     connection.execute(
                         f"ALTER TABLE researches ADD COLUMN {column} {definition}"
                     )
+            experiment_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(experiments)"
+                ).fetchall()
+            }
+            if "token_count" not in experiment_columns:
+                connection.execute(
+                    "ALTER TABLE experiments ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0"
+                )
+            self._backfill_experiment_token_counts(connection)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_researches_queue "
                 "ON researches(status, queue_order, queued_at)"
             )
+
+    @staticmethod
+    def _token_count_from_log_data(data: Mapping[str, Any]) -> int:
+        total_tokens_m = data.get("total_tokens_M")
+        if total_tokens_m is not None:
+            try:
+                return max(0, round(float(total_tokens_m) * 1_000_000))
+            except (TypeError, ValueError):
+                return 0
+
+        measurements = data.get("measurements")
+        if isinstance(measurements, list):
+            return sum(
+                max(0, int(item.get("prompt_tokens") or 0))
+                + max(0, int(item.get("output_tokens") or 0))
+                for item in measurements
+                if isinstance(item, Mapping)
+            )
+
+        repeats = data.get("repeats")
+        if not isinstance(repeats, list):
+            return 0
+        try:
+            batch_size = max(1, int(data.get("batch_size") or 1))
+        except (TypeError, ValueError):
+            batch_size = 1
+
+        samples = [item for item in repeats if isinstance(item, Mapping)]
+        warmup = data.get("warmup")
+        if isinstance(warmup, Mapping):
+            samples.append(warmup)
+        total = 0
+        for sample in samples:
+            try:
+                input_tokens = max(
+                    0, int(sample.get("input_tokens_per_request") or 0)
+                )
+                output_tokens = max(0, int(sample.get("total_output_tokens") or 0))
+            except (TypeError, ValueError):
+                continue
+            total += input_tokens * batch_size + output_tokens
+        return total
+
+    @classmethod
+    def _backfill_experiment_token_counts(
+        cls, connection: sqlite3.Connection
+    ) -> None:
+        rows = connection.execute(
+            """SELECT experiment_id, data_json FROM research_logs
+               WHERE experiment_id IS NOT NULL
+                 AND event_type IN ('experiment_completed', 'experiment_accepted', 'experiment_rejected')
+               ORDER BY created_at"""
+        ).fetchall()
+        totals: dict[str, int] = {}
+        for row in rows:
+            try:
+                data = json.loads(row["data_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, Mapping):
+                continue
+            count = cls._token_count_from_log_data(data)
+            experiment_id = str(row["experiment_id"])
+            totals[experiment_id] = max(totals.get(experiment_id, 0), count)
+        connection.executemany(
+            """UPDATE experiments SET token_count = ?
+               WHERE id = ? AND COALESCE(token_count, 0) = 0""",
+            ((count, experiment_id) for experiment_id, count in totals.items() if count),
+        )
 
     @staticmethod
     def _migrate_researches_for_queue(
@@ -487,8 +591,9 @@ class Database:
                    (id, title, original_prompt, objective, status, metric_name, metric_direction,
                     baseline_value, best_value, gpu_source_id, target_gpu_allocation, workspace_path,
                     adapter_type, research_type, model_id, model_digest, model_runtime, benchmark_profile,
+                    researcher_model_id, schedule_start_time, schedule_end_time, schedule_timezone, schedule_utc_offset_minutes,
                     queued_at, queue_order, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     research_id,
                     values["title"],
@@ -505,6 +610,11 @@ class Database:
                     values.get("model_digest"),
                     values.get("model_runtime"),
                     values.get("benchmark_profile"),
+                    values.get("researcher_model_id"),
+                    values.get("schedule_start_time"),
+                    values.get("schedule_end_time"),
+                    values.get("schedule_timezone"),
+                    values.get("schedule_utc_offset_minutes"),
                     queued_at,
                     queue_order,
                     now,
@@ -516,11 +626,52 @@ class Database:
     def _research_select(self) -> str:
         return """
             SELECT r.*, g.name AS gpu_name, g.type AS gpu_type,
-                   COUNT(DISTINCT e.id) AS experiment_count
+                   COUNT(DISTINCT e.id) AS experiment_count,
+                   COALESCE(SUM(e.token_count), 0) AS training_tokens,
+                   COALESCE((SELECT SUM(u.input_tokens) FROM research_token_usage u
+                             WHERE u.research_id = r.id), 0) AS input_tokens,
+                   COALESCE((SELECT SUM(u.cached_input_tokens) FROM research_token_usage u
+                             WHERE u.research_id = r.id), 0) AS cached_input_tokens,
+                   COALESCE((SELECT SUM(u.output_tokens) FROM research_token_usage u
+                             WHERE u.research_id = r.id), 0) AS output_tokens,
+                   COALESCE((SELECT SUM(u.reasoning_output_tokens) FROM research_token_usage u
+                             WHERE u.research_id = r.id), 0) AS reasoning_output_tokens,
+                   COALESCE((SELECT SUM(u.input_tokens + u.output_tokens)
+                             FROM research_token_usage u WHERE u.research_id = r.id), 0)
+                             AS total_tokens
             FROM researches r
             JOIN gpu_sources g ON g.id = r.gpu_source_id
             LEFT JOIN experiments e ON e.research_id = r.id
         """
+
+    def record_codex_token_usage(
+        self,
+        research_id: str,
+        phase: str,
+        *,
+        call_id: str,
+        input_tokens: int,
+        cached_input_tokens: int = 0,
+        output_tokens: int,
+        reasoning_output_tokens: int = 0,
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO research_token_usage
+                   (research_id, call_id, phase, input_tokens, cached_input_tokens,
+                    output_tokens, reasoning_output_tokens, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    research_id,
+                    call_id,
+                    phase[:80],
+                    max(0, int(input_tokens)),
+                    max(0, int(cached_input_tokens)),
+                    max(0, int(output_tokens)),
+                    max(0, int(reasoning_output_tokens)),
+                    utc_now(),
+                ),
+            )
 
     def list_researches(
         self, status: str | None = None, limit: int = 100, offset: int = 0
@@ -575,6 +726,23 @@ class Database:
             rows = connection.execute(query).fetchall()
         return [self._record(row) or {} for row in rows]
 
+    def list_process_cleanup_candidates(self) -> list[dict[str, Any]]:
+        """Return records whose last process termination may be uncertain."""
+
+        query = (
+            self._research_select()
+            + " WHERE r.status IN ('running', 'paused')"
+            + " OR (r.status = 'failed' AND EXISTS ("
+            + "SELECT 1 FROM research_logs cleanup_log "
+            + "WHERE cleanup_log.research_id = r.id "
+            + "AND cleanup_log.event_type IN "
+            + "('research_control_error', 'stale_process_warning')))"
+            + " GROUP BY r.id ORDER BY r.updated_at DESC"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(query).fetchall()
+        return [self._record(row) or {} for row in rows]
+
     def get_research(
         self, research_id: str, *, detail: bool = False
     ) -> dict[str, Any] | None:
@@ -611,6 +779,11 @@ class Database:
             "gpu_source_id",
             "target_gpu_allocation",
             "workspace_path",
+            "researcher_model_id",
+            "schedule_start_time",
+            "schedule_end_time",
+            "schedule_timezone",
+            "schedule_utc_offset_minutes",
         }
         updates = {key: value for key, value in values.items() if key in allowed}
         if not updates:
@@ -786,6 +959,26 @@ class Database:
                 (summary[:1000], experiment_id),
             )
 
+    def update_experiment_previous_best(
+        self, experiment_id: str, previous_best: float | None
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE experiments SET previous_best = ?
+                   WHERE id = ? AND completed_at IS NULL""",
+                (previous_best, experiment_id),
+            )
+
+    def update_experiment_token_count(
+        self, experiment_id: str, token_count: int
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE experiments SET token_count = MAX(token_count, ?)
+                   WHERE id = ? AND completed_at IS NULL""",
+                (max(0, int(token_count)), experiment_id),
+            )
+
     def finish_experiment(
         self,
         experiment_id: str,
@@ -794,18 +987,23 @@ class Database:
         accepted: bool,
         git_commit: str | None,
         error: str | None = None,
+        token_count: int | None = None,
         research_updates: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         with self.transaction() as connection:
             connection.execute(
                 """UPDATE experiments SET metric_value = ?, accepted = ?, completed_at = ?,
-                   git_commit = ?, error = ? WHERE id = ?""",
+                   git_commit = ?, error = ?,
+                   token_count = CASE WHEN ? IS NULL THEN token_count ELSE MAX(token_count, ?) END
+                   WHERE id = ?""",
                 (
                     metric_value,
                     int(accepted),
                     utc_now(),
                     git_commit,
                     error,
+                    max(0, int(token_count)) if token_count is not None else None,
+                    max(0, int(token_count)) if token_count is not None else None,
                     experiment_id,
                 ),
             )
@@ -914,6 +1112,16 @@ class Database:
                 )
         return self.get_article(article_id) or {}
 
+    def _publication_identities(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, title, created_at FROM articles ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        return [self._record(row) or {} for row in rows]
+
+    def _publication_slugs(self) -> dict[str, str]:
+        return article_slug_map(self._publication_identities())
+
     def list_articles(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -924,28 +1132,24 @@ class Database:
                    ORDER BY a.updated_at DESC"""
             ).fetchall()
         records = [self._record(row) or {} for row in rows]
-        slugs = article_slug_map(records)
+        slugs = self._publication_slugs()
         for record in records:
             record["slug"] = slugs[record["id"]]
         return records
 
     def get_article(self, article_identifier: str) -> dict[str, Any] | None:
+        slugs = self._publication_slugs()
+        article_id = article_identifier
+        if article_identifier not in slugs:
+            article_id = next(
+                (
+                    identifier
+                    for identifier, slug in slugs.items()
+                    if slug == article_identifier
+                ),
+                "",
+            )
         with self.connect() as connection:
-            identity_rows = connection.execute(
-                "SELECT id, title, created_at FROM articles"
-            ).fetchall()
-            identities = [self._record(row) or {} for row in identity_rows]
-            slugs = article_slug_map(identities)
-            article_id = article_identifier
-            if article_identifier not in slugs:
-                article_id = next(
-                    (
-                        identifier
-                        for identifier, slug in slugs.items()
-                        if slug == article_identifier
-                    ),
-                    "",
-                )
             row = connection.execute(
                 """SELECT a.*, r.status AS research_status, r.metric_name, r.best_value,
                           r.research_type, r.model_id
