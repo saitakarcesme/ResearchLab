@@ -407,20 +407,31 @@ def create_app(
 
     @app.get("/api/articles/{article_id}")
     def get_article(article_id: str, request: Request) -> dict[str, Any]:
-        article = _database(request).get_article(article_id)
+        database = _database(request)
+        article = database.get_article(article_id)
         if article is None:
             raise _not_found("Article")
+        research = database.get_research(article["research_id"], detail=True)
+        if research is not None:
+            article.update(
+                {
+                    "objective": research["objective"],
+                    "baseline_value": research["baseline_value"],
+                    "metric_direction": research["metric_direction"],
+                    "experiments": research["experiments"],
+                }
+            )
         return article
 
     @app.post("/api/researches/{research_id}/article")
     def generate_article(research_id: str, request: Request) -> dict[str, Any]:
         database = _database(request)
-        research = database.get_research(research_id, detail=True)
+        research = database.get_research(research_id, detail=False)
         if research is None:
             raise _not_found("Research")
-        markdown = generate_article_markdown(
-            research, research["experiments"], research["logs"]
-        )
+        experiments = database.list_experiments(research_id)
+        logs = database.list_logs(research_id, limit=1_000_000)
+        markdown = generate_article_markdown(research, experiments, logs)
         article = database.upsert_article(research_id, research["title"], markdown)
         database.add_log(
             research_id,

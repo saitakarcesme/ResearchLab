@@ -49,6 +49,17 @@ export interface Research {
   experiment_count?: number;
   experiments?: Experiment[];
   logs?: ResearchLog[];
+  runtime?: {
+    phase?: string;
+    phase_changed_at?: string | null;
+    allocation?: {
+      target_percent?: number | null;
+      mode?: string;
+      target_role?: string;
+      target_enforced?: boolean;
+      is_hard_utilization_target?: boolean;
+    };
+  };
 }
 
 export interface GpuProcess {
@@ -88,7 +99,11 @@ export interface Article {
   title: string;
   markdown?: string;
   metric_name?: string;
+  metric_direction?: MetricDirection;
+  objective?: string;
+  baseline_value?: number | null;
   best_value?: number | null;
+  experiments?: Experiment[];
   created_at: string;
   updated_at: string;
 }

@@ -6,8 +6,9 @@ import { Children, isValidElement, useEffect, useState, type ReactNode } from "r
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getArticle } from "@/lib/api";
-import { formatMetric } from "@/lib/format";
+import { formatMetric, metricLabel } from "@/lib/format";
 import type { Article } from "@/lib/types";
+import { ArticleResultChart } from "./article-result-chart";
 
 function stripLeadingTitle(markdown: string, title: string): string {
   const match = markdown.match(/^\s*#\s+([^\r\n]+)\r?\n(?:\s*\r?\n)?/);
@@ -43,6 +44,38 @@ function markdownHeadings(markdown: string): Array<{ id: string; label: string }
     .map((label) => ({ id: headingId(label), label }));
 }
 
+function removeInternalErrorSection(markdown: string): string {
+  return markdown
+    .replace(/\n## (?:Recorded errors|Errors recorded along the way)\s*\n[\s\S]*?(?=\n## |$)/gi, "")
+    .trim();
+}
+
+function splitIntroduction(markdown: string): { introduction: string; body: string } {
+  const sectionIndex = markdown.search(/^##\s+/m);
+  if (sectionIndex < 0) return { introduction: markdown, body: "" };
+  return {
+    introduction: markdown.slice(0, sectionIndex).trim(),
+    body: markdown.slice(sectionIndex).trim(),
+  };
+}
+
+function ArticleMarkdown({ markdown }: { markdown: string }) {
+  if (!markdown) return null;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h2: ({ children }) => {
+          const id = headingId(plainText(children));
+          return <h2 id={id}>{children}</h2>;
+        },
+      }}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+}
+
 export function ArticleReader({ articleId }: { articleId: string }) {
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +104,8 @@ export function ArticleReader({ articleId }: { articleId: string }) {
     return <div className="research-loader" role="status"><LoaderCircle className="spin" size={18} /> Loading article</div>;
   }
 
-  const markdown = stripLeadingTitle(article.markdown ?? "", article.title);
+  const markdown = removeInternalErrorSection(stripLeadingTitle(article.markdown ?? "", article.title));
+  const { introduction, body } = splitIntroduction(markdown);
   const headings = markdownHeadings(markdown);
   const wordCount = markdown.replace(/[#>*_`|\[\]-]/g, " ").trim().split(/\s+/).filter(Boolean).length;
   const readingMinutes = Math.max(1, Math.ceil(wordCount / 210));
@@ -81,7 +115,7 @@ export function ArticleReader({ articleId }: { articleId: string }) {
     year: "numeric",
   }).format(new Date(article.updated_at || article.created_at));
   const metricSummary = article.metric_name
-    ? `${article.metric_name}${article.best_value != null ? ` ${formatMetric(article.best_value)}` : ""}`
+    ? `${metricLabel(article.metric_name)}${article.best_value != null ? ` ${formatMetric(article.best_value)}` : ""}`
     : null;
 
   return (
@@ -114,17 +148,9 @@ export function ArticleReader({ articleId }: { articleId: string }) {
             <h1>{article.title}</h1>
           </header>
           <div className="markdown-body">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                h2: ({ children }) => {
-                  const id = headingId(plainText(children));
-                  return <h2 id={id}>{children}</h2>;
-                },
-              }}
-            >
-              {markdown}
-            </ReactMarkdown>
+            <ArticleMarkdown markdown={introduction} />
+            <ArticleResultChart article={article} />
+            <ArticleMarkdown markdown={body} />
           </div>
         </article>
       </div>

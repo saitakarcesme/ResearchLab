@@ -23,3 +23,15 @@ export function formatTime(value: string | null | undefined): string {
 export function titleCase(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
+
+export function metricLabel(name: string): string {
+  if (name === "val_bpb") return "Text prediction loss";
+  return titleCase(name);
+}
+
+export function metricDescription(name: string): string {
+  if (name === "val_bpb") {
+    return "How much the model struggles to predict text it has not seen. Lower is better.";
+  }
+  return "The score used to compare each completed test.";
+}

@@ -4,7 +4,7 @@ import { ArrowUpRight, BookOpen, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { listArticles } from "@/lib/api";
-import { formatMetric } from "@/lib/format";
+import { formatMetric, metricLabel } from "@/lib/format";
 import type { Article } from "@/lib/types";
 
 export function ArticlesView() {
@@ -41,7 +41,7 @@ export function ArticlesView() {
                 <h2>{article.title}</h2>
               </div>
               <div className="cover-footer">
-                <span>{article.metric_name ?? "Experiment record"}{article.best_value != null ? ` · ${formatMetric(article.best_value)}` : ""}</span>
+                <span>{article.metric_name ? metricLabel(article.metric_name) : "Research result"}{article.best_value != null ? ` · ${formatMetric(article.best_value)}` : ""}</span>
                 <ArrowUpRight size={16} />
               </div>
             </Link>

@@ -102,7 +102,18 @@ def test_real_supervisor_state_machine_start_pause_resume_stop(settings) -> None
     assert supervisor.start(research["id"])["status"] == "running"
     assert WaitingAdapter.prepared.wait(1)
     assert supervisor.pause(research["id"])["status"] == "paused"
-    assert supervisor.runtime_snapshot(research["id"])["paused"] is True
+    snapshot = supervisor.runtime_snapshot(research["id"])
+    assert snapshot["paused"] is True
+    assert snapshot["phase"] == "ready"
+    assert snapshot["phase_changed_at"].endswith("Z")
+    assert snapshot["allocation"] == {
+        "target_percent": 100,
+        "mode": "exclusive_serialized",
+        "target_role": "scheduling_metadata",
+        "target_enforced": False,
+        "is_hard_utilization_target": False,
+        "utilization_source": "nvidia-smi_device_sample",
+    }
     assert supervisor.resume(research["id"])["status"] == "running"
     assert supervisor.stop(research["id"])["status"] == "stopped"
     assert supervisor.runtime_snapshot(research["id"])["attached"] is False
@@ -209,5 +220,9 @@ def test_explicit_cuda_mps_mode_allows_concurrent_research_processes(settings) -
         supervisor.start(research_id)
     assert MpsConcurrencyAdapter.both_running.wait(2)
     assert MpsConcurrencyAdapter.max_active == 2
+    snapshot = supervisor.runtime_snapshot(research_ids[0])
+    assert snapshot["allocation"]["mode"] == "cuda_mps_active_thread_percentage"
+    assert snapshot["allocation"]["target_enforced"] is True
+    assert snapshot["allocation"]["is_hard_utilization_target"] is False
     for research_id in research_ids:
         supervisor.stop(research_id)

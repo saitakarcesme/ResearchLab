@@ -1,11 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Activity, ArrowUp, ChevronRight, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
+import { ArrowUp, ChevronRight, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { controlResearch, createResearch, getGpuTelemetry, listGpuSources, listResearches } from "@/lib/api";
-import { formatMetric } from "@/lib/format";
+import { formatMetric, metricLabel } from "@/lib/format";
 import type { GpuSource, GpuTelemetry, Research } from "@/lib/types";
 import { GpuLineBackdrop } from "./gpu-line-backdrop";
 import { ResearchLiveView } from "./research-live-view";
@@ -134,27 +134,10 @@ export function LabView() {
       <section className="lab-composer-section">
         <GpuLineBackdrop utilization={telemetry?.utilization ?? null} />
         <form className="research-composer" onSubmit={prepareLaunch}>
-          <header className="composer-header">
-            <div className="composer-intro">
-              <span className="composer-mark" aria-hidden="true"><Sparkles size={16} strokeWidth={1.8} /></span>
-              <div>
-                <span>New research</span>
-                <strong>Give the lab a measurable goal</strong>
-              </div>
-            </div>
-            <div className={`composer-telemetry ${telemetry?.available ? "is-live" : ""}`}>
-              <Activity size={13} strokeWidth={2} aria-hidden="true" />
-              <span>
-                {telemetry?.available && telemetry.utilization != null
-                  ? `${Math.round(telemetry.utilization)}% GPU`
-                  : "GPU ready"}
-              </span>
-            </div>
-          </header>
           <label className="sr-only" htmlFor="research-prompt">What do you want to research?</label>
           <textarea
             id="research-prompt"
-            rows={3}
+            rows={1}
             minLength={3}
             maxLength={4000}
             value={prompt}
@@ -169,15 +152,11 @@ export function LabView() {
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder="Describe the metric, constraints, and result you want to improve…"
+            placeholder="What do you want to research?"
           />
-          <footer className="composer-footer">
-            <span className="composer-hint"><CornerDownLeft size={13} aria-hidden="true" /> Enter to continue · Shift + Enter for a new line</span>
-            <button className="composer-send" type="submit" aria-label="Configure research" disabled={prompt.trim().length < 3}>
-              <span>Configure run</span>
-              <ArrowUp size={16} strokeWidth={2.2} />
-            </button>
-          </footer>
+          <button className="composer-send" type="submit" aria-label="Configure research" disabled={prompt.trim().length < 3}>
+            <ArrowUp size={17} strokeWidth={2} />
+          </button>
         </form>
 
         <AnimatePresence mode="wait">
@@ -199,8 +178,9 @@ export function LabView() {
                 </select>
               </label>
               <label className="allocation-control">
-                <span>Target allocation <strong>{allocation}%</strong></span>
+                <span>GPU scheduling share <strong>{allocation}%</strong></span>
                 <input type="range" min={10} max={100} step={5} value={allocation} onChange={(event) => setAllocation(Number(event.target.value))} />
+                <small>{allocation}% requests this scheduling share while a GPU test is running.</small>
               </label>
               <button className="primary-button" type="button" disabled={starting || !selectedSource} onClick={() => void launch()}>
                 {starting ? <LoaderCircle className="spin" size={16} /> : <ArrowUp size={16} />}
@@ -229,7 +209,7 @@ export function LabView() {
                   <StatusPill status={research.status} />
                   <span>
                     {research.experiment_count ?? research.experiments?.length ?? 0} experiments
-                    {research.best_value != null ? ` · ${research.metric_name} ${formatMetric(research.best_value)}` : ""}
+                    {research.best_value != null ? ` · ${metricLabel(research.metric_name)} ${formatMetric(research.best_value)}` : ""}
                   </span>
                   <ChevronRight size={15} aria-hidden="true" />
                 </Link>

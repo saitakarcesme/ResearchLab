@@ -1241,6 +1241,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
     ) -> int:
         self._agent_failure_streak += 1
         retry_delay = agent_retry_delay_seconds(self._agent_failure_streak)
+        self.context.runtime.set_phase("candidate_retry_backoff")
         next_attempt = attempt_number + 1
         timed_out = isinstance(error, AgentGenerationTimeout)
         kind = "timeout" if timed_out else "candidate_error"
@@ -1267,7 +1268,9 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 ),
             },
         )
-        self.context.runtime.stop_event.wait(retry_delay)
+        stopped = self.context.runtime.stop_event.wait(retry_delay)
+        if not stopped:
+            self.context.runtime.set_phase("ready")
         return retry_delay
 
     def run_iteration(self) -> None:
@@ -1284,12 +1287,14 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
         baseline = best is None
         payload: dict[str, Any]
         if baseline:
+            self.context.runtime.set_phase("preparing_experiment")
             payload = {
                 "hypothesis": "Establish the pinned autoresearch baseline on the selected GPU profile.",
                 "change_summary": "Baseline with the runner-managed RTX 3090 batch-size profile.",
             }
         else:
             attempt_number = self._agent_failure_streak + 1
+            self.context.runtime.set_phase("candidate_generation")
             self.db.add_log(
                 self.research_id,
                 "agent_started",
@@ -1312,6 +1317,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 self._validate_candidate_diff(self.workspace)
             except InterruptedError:
                 self._clean_candidate(base_sha)
+                self.context.runtime.set_phase("stopping")
                 return
             except Exception as exc:  # noqa: BLE001 - candidate failures are persisted and the worktree is restored
                 self._clean_candidate(base_sha)
@@ -1322,6 +1328,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 )
                 return
             self._agent_failure_streak = 0
+            self.context.runtime.set_phase("preparing_experiment")
 
         experiment = self.db.create_experiment(
             self.research_id, payload["hypothesis"], payload["change_summary"], best
@@ -1350,6 +1357,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 data={"git_commit": candidate_sha},
             )
 
+        self.context.runtime.set_phase("waiting_for_gpu")
         if not self._acquire_gpu():
             self._clean_candidate(base_sha)
             self.db.finish_experiment(
@@ -1359,7 +1367,31 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 git_commit=candidate_sha,
                 error="Stopped before GPU execution began",
             )
+            self.context.runtime.set_phase("stopping")
             return
+        self.context.runtime.set_phase("gpu_evaluation")
+        allocation_mode = (
+            "CUDA MPS active-thread percentage"
+            if self.settings.use_cuda_mps
+            else "exclusive serialized access"
+        )
+        self.db.add_log(
+            self.research_id,
+            "gpu_evaluation_started",
+            (
+                "GPU test started. Live utilization can be low briefly during "
+                "setup, compilation, and validation."
+            ),
+            experiment_id=experiment_id,
+            data={
+                "phase": "gpu_evaluation",
+                "target_gpu_allocation": research["target_gpu_allocation"],
+                "allocation_mode": allocation_mode,
+                "target_is_hard_utilization_guarantee": False,
+                "live_utilization_source": "nvidia-smi_device_sample",
+                "mfu_reference": "H100_BF16_PEAK_FLOPS_989.5e12",
+            },
+        )
         execution_error: str | None = None
         evaluation: ProcessResult | None = None
         output_path: Path | None = None
@@ -1412,6 +1444,11 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
             execution_error = str(exc)
         finally:
             self.context.gpu_lock.release()
+            self.context.runtime.set_phase(
+                "stopping"
+                if self.context.runtime.stop_event.is_set()
+                else "processing_results"
+            )
 
         output_text = (
             output_path.read_text(encoding="utf-8", errors="replace")
@@ -1453,6 +1490,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 level="error",
                 experiment_id=experiment_id,
             )
+            self.context.runtime.set_phase("ready")
             return
 
         assert metric is not None and summary is not None
@@ -1509,6 +1547,8 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 "metric_name": "val_bpb",
                 "metric_value": metric,
                 "peak_vram_mb": summary.peak_vram_mb,
+                "mfu_percent": summary.mfu_percent,
+                "mfu_reference": "H100_BF16_PEAK_FLOPS_989.5e12",
                 "training_seconds": summary.training_seconds,
                 "total_seconds": summary.total_seconds,
                 "num_steps": summary.num_steps,
@@ -1527,3 +1567,4 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
                 "git_commit": candidate_sha,
             },
         )
+        self.context.runtime.set_phase("ready")

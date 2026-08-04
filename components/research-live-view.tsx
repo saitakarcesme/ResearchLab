@@ -11,7 +11,7 @@ import {
   getResearch,
   researchEventsUrl,
 } from "@/lib/api";
-import { formatMetric } from "@/lib/format";
+import { formatMetric, metricDescription, metricLabel } from "@/lib/format";
 import type { Article, GpuTelemetry, Research } from "@/lib/types";
 import { GpuPerformance } from "./gpu-performance";
 import { LiveLogs } from "./live-logs";
@@ -73,6 +73,7 @@ export function ResearchLiveView({
       "research_brief_fallback",
       "agent_started",
       "agent_error",
+      "gpu_evaluation_started",
       "experiment_started",
       "change_applied",
       "oom_retry",
@@ -146,6 +147,17 @@ export function ResearchLiveView({
   const canResume = research.status === "paused";
   const canStart = research.status === "stopped" || research.status === "failed";
   const canStop = research.status === "running" || research.status === "paused";
+  const hasActiveExperiment = research.experiments?.some(
+    (experiment) => experiment.started_at && !experiment.completed_at,
+  ) ?? false;
+  const runtimePhase = research.runtime?.phase;
+  const gpuPhase = research.status === "paused"
+    ? "paused"
+    : research.status !== "running"
+      ? "idle"
+      : runtimePhase === "gpu_evaluation" || (!runtimePhase && hasActiveExperiment)
+        ? "training"
+        : "planning";
 
   return (
     <motion.div
@@ -161,9 +173,9 @@ export function ResearchLiveView({
             <StatusPill status={research.status} />
           </div>
           <div className="research-metric-line">
-            <span>{research.metric_name}</span>
+            <span>{metricLabel(research.metric_name)}</span>
             <strong>{formatMetric(research.best_value ?? research.baseline_value)}</strong>
-            <span>{research.metric_direction === "lower_is_better" ? "lower is better" : "higher is better"}</span>
+            <span>{metricDescription(research.metric_name)}</span>
           </div>
         </div>
 
@@ -210,7 +222,7 @@ export function ResearchLiveView({
           direction={research.metric_direction}
           baseline={research.baseline_value}
         />
-        <GpuPerformance telemetry={telemetry} target={research.target_gpu_allocation} />
+        <GpuPerformance telemetry={telemetry} target={research.target_gpu_allocation} phase={gpuPhase} />
       </div>
       <LiveLogs logs={research.logs ?? []} />
     </motion.div>

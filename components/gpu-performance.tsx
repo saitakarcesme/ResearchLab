@@ -7,7 +7,24 @@ import type { GpuTelemetry } from "@/lib/types";
 
 interface UsagePoint { sample: number; value: number }
 
-export function GpuPerformance({ telemetry, target }: { telemetry: GpuTelemetry | null; target: number }) {
+export type GpuActivityPhase = "planning" | "training" | "paused" | "idle";
+
+const phaseCopy: Record<GpuActivityPhase, string> = {
+  planning: "Planning next test",
+  training: "GPU test running",
+  paused: "Research paused",
+  idle: "Research idle",
+};
+
+export function GpuPerformance({
+  telemetry,
+  target,
+  phase,
+}: {
+  telemetry: GpuTelemetry | null;
+  target: number;
+  phase: GpuActivityPhase;
+}) {
   const cursor = useRef(0);
   const [history, setHistory] = useState<UsagePoint[]>([]);
 
@@ -31,14 +48,14 @@ export function GpuPerformance({ telemetry, target }: { telemetry: GpuTelemetry 
           <span className="eyebrow">GPU performance</span>
           <h2 id="gpu-title">{telemetry?.name ?? "GPU unavailable"}</h2>
         </div>
-        <span className={`live-indicator ${telemetry?.available ? "online" : ""}`}>
-          <i /> {telemetry?.available ? "live" : "offline"}
+        <span className={`live-indicator ${phase === "training" ? "online" : ""}`}>
+          <i /> {phaseCopy[phase]}
         </span>
       </div>
 
       <div className="gpu-hero-metric">
         <strong>{telemetry?.utilization == null ? "—" : `${Math.round(telemetry.utilization)}%`}</strong>
-        <span>actual utilization</span>
+        <span>live GPU utilization</span>
       </div>
 
       <div className="gpu-sparkline" aria-hidden="true">
@@ -60,13 +77,19 @@ export function GpuPerformance({ telemetry, target }: { telemetry: GpuTelemetry 
       <div className="gpu-stats">
         <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "—" : `${Math.round(telemetry.temperature)}°C`}</strong></div>
         <div><span>VRAM</span><strong>{formatMemory(used)} / {formatMemory(total)}</strong></div>
-        <div><span>Target allocation</span><strong>{target}%</strong></div>
+        <div><span>Scheduler share</span><strong>{target}%</strong></div>
       </div>
 
       <div className="memory-track" aria-label={total ? `VRAM ${Math.round(memoryPercent)} percent used` : "VRAM unavailable"}>
         <span style={{ width: `${memoryPercent}%` }} />
       </div>
-      <p className="allocation-note">Target guides scheduling; live usage is measured separately.</p>
+      <p className="allocation-note">
+        {phase === "planning"
+          ? `${target}% is the requested scheduling share. The GPU can rest while the next test is being planned.`
+          : phase === "training"
+            ? `${target}% is the requested scheduling share; the live number above is the measured load.`
+            : "The scheduler share applies again when GPU training resumes."}
+      </p>
     </section>
   );
 }

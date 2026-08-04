@@ -30,6 +30,15 @@ class RecordingEvent:
         return False
 
 
+class RecordingRuntime:
+    def __init__(self) -> None:
+        self.stop_event = RecordingEvent()
+        self.phases: list[str] = []
+
+    def set_phase(self, phase: str) -> None:
+        self.phases.append(phase)
+
+
 def test_agent_retry_backoff_is_exponential_bounded_and_unlimited() -> None:
     assert [agent_retry_delay_seconds(attempt) for attempt in range(1, 9)] == [
         5,
@@ -60,9 +69,9 @@ def test_candidate_command_overrides_personal_reasoning_effort(tmp_path: Path) -
 def test_agent_timeout_records_attempt_and_waits_stop_aware() -> None:
     adapter = object.__new__(KarpathyAutoresearchAdapter)
     database = RecordingDatabase()
-    stop_event = RecordingEvent()
+    runtime = RecordingRuntime()
     adapter.db = database
-    adapter.context = SimpleNamespace(runtime=SimpleNamespace(stop_event=stop_event))
+    adapter.context = SimpleNamespace(runtime=runtime)
     adapter.settings = SimpleNamespace(
         agent_timeout_seconds=600, agent_reasoning_effort="high"
     )
@@ -76,7 +85,8 @@ def test_agent_timeout_records_attempt_and_waits_stop_aware() -> None:
     )
 
     assert delay == 20
-    assert stop_event.waits == [20]
+    assert runtime.stop_event.waits == [20]
+    assert runtime.phases == ["candidate_retry_backoff", "ready"]
     args, kwargs = database.logs[-1]
     assert args[:2] == ("research-id", "agent_error")
     assert "attempt 4" in args[2]

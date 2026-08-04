@@ -13,7 +13,7 @@ from backend.adapters import (
     ResearchAdapter,
 )
 from backend.config import Settings
-from backend.db import Database
+from backend.db import Database, utc_now
 from backend.process_control import ManagedProcess
 from backend.telemetry import SSHCommandRunner, TelemetryService
 
@@ -28,12 +28,28 @@ class ResearchRuntime:
         self._lock = threading.RLock()
         self.thread: threading.Thread | None = None
         self.control_error: str | None = None
+        self.phase = "starting"
+        self.phase_changed_at = utc_now()
 
     def set_process(self, process: ManagedProcess | None) -> None:
         with self._lock:
             self._process = process
             if process is not None and not self.run_event.is_set():
                 process.pause()
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            if self.phase != phase:
+                self.phase = phase
+                self.phase_changed_at = utc_now()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "phase": self.phase,
+                "phase_changed_at": self.phase_changed_at,
+                "subprocess_attached": self._process is not None,
+            }
 
     def wait_until_running(self) -> bool:
         while not self.stop_event.is_set():
@@ -60,6 +76,7 @@ class ResearchRuntime:
     def stop(self) -> None:
         self.stop_event.set()
         self.run_event.set()
+        self.set_phase("stopping")
         with self._lock:
             if self._process:
                 self._process.terminate()
@@ -204,7 +221,9 @@ class ResearchSupervisor:
         self, research_id: str, runtime: ResearchRuntime, adapter: ResearchAdapter
     ) -> None:
         try:
+            runtime.set_phase("preparing")
             adapter.prepare()
+            runtime.set_phase("ready")
             self.db.add_log(
                 research_id, "research_ready", "Research workspace is ready."
             )
@@ -230,6 +249,7 @@ class ResearchSupervisor:
                 self.db.update_research(research_id, {"status": "failed"})
                 self.db.add_log(research_id, "research_failed", str(exc), level="error")
         finally:
+            runtime.set_phase("detached")
             with self._lock:
                 self._runtimes.pop(research_id, None)
 
@@ -378,10 +398,35 @@ class ResearchSupervisor:
     def runtime_snapshot(self, research_id: str) -> dict[str, Any]:
         with self._lock:
             runtime = self._runtimes.get(research_id)
-        return {
+        research = self.db.get_research(research_id)
+        target = research.get("target_gpu_allocation") if research else None
+        mps = self.settings.use_cuda_mps
+        result = {
             "attached": runtime is not None,
             "thread_alive": bool(
                 runtime and runtime.thread and runtime.thread.is_alive()
             ),
             "paused": bool(runtime and not runtime.run_event.is_set()),
+            "phase": "detached",
+            "phase_changed_at": None,
+            "subprocess_attached": False,
+            "allocation": {
+                "target_percent": target,
+                "mode": (
+                    "cuda_mps_active_thread_percentage"
+                    if mps
+                    else "exclusive_serialized"
+                ),
+                "target_role": (
+                    "cuda_mps_active_thread_percentage"
+                    if mps
+                    else "scheduling_metadata"
+                ),
+                "target_enforced": mps,
+                "is_hard_utilization_target": False,
+                "utilization_source": "nvidia-smi_device_sample",
+            },
         }
+        if runtime:
+            result.update(runtime.snapshot())
+        return result

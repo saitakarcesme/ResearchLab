@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { formatMetric } from "@/lib/format";
+import { formatMetric, metricDescription, metricLabel } from "@/lib/format";
 import type { Experiment, MetricDirection } from "@/lib/types";
 
 interface ChartPoint {
@@ -82,13 +82,15 @@ function ProgressChartComponent({
       .slice(0, 4),
     [experiments],
   );
+  const displayMetric = metricLabel(metricName);
 
   return (
     <section className="surface-card progress-card" aria-labelledby="progress-title">
       <div className="card-heading">
         <div>
           <span className="eyebrow">Research progress</span>
-          <h2 id="progress-title">{metricName}</h2>
+          <h2 id="progress-title">{displayMetric}</h2>
+          <p className="chart-metric-description">{metricDescription(metricName)}</p>
         </div>
         <div className="chart-key" aria-label="Chart legend">
           <span><i className="key-accepted" /> accepted</span>
@@ -134,7 +136,7 @@ function ProgressChartComponent({
                     color: "#f5f1f6",
                     boxShadow: "0 16px 50px rgba(0,0,0,.35)",
                   }}
-                  formatter={(value, name) => [formatMetric(Number(value)), name === "best" ? "Running best" : metricName]}
+                  formatter={(value, name) => [formatMetric(Number(value)), name === "best" ? "Best so far" : displayMetric]}
                   labelFormatter={(value) => `Experiment ${value}`}
                 />
                 <Area type="monotone" dataKey="metric" fill="url(#progressFill)" stroke="none" />
