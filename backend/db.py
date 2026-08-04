@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import unicodedata
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -18,6 +19,83 @@ def utc_now() -> str:
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
+
+
+_TURKISH_ASCII_TRANSLATION = str.maketrans(
+    {
+        "ç": "c",
+        "ğ": "g",
+        "ı": "i",
+        "ö": "o",
+        "ş": "s",
+        "ü": "u",
+        "Ç": "C",
+        "Ğ": "G",
+        "İ": "I",
+        "Ö": "O",
+        "Ş": "S",
+        "Ü": "U",
+    }
+)
+
+
+def article_title_slug(title: str) -> str:
+    """Return a readable, URL-safe slug while retaining non-Latin scripts."""
+
+    normalized = unicodedata.normalize(
+        "NFKD", title.translate(_TURKISH_ASCII_TRANSLATION)
+    )
+    parts: list[str] = []
+    needs_separator = False
+    for character in normalized.casefold():
+        if unicodedata.combining(character):
+            continue
+        if character.isalnum():
+            if needs_separator and parts:
+                parts.append("-")
+            parts.append(character)
+            needs_separator = False
+        else:
+            needs_separator = True
+    return "".join(parts).strip("-") or "article"
+
+
+def article_slug_map(articles: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """Assign stable slugs in creation order, disambiguating later collisions."""
+
+    ordered = sorted(
+        articles,
+        key=lambda article: (str(article.get("created_at", "")), str(article["id"])),
+    )
+    assigned: dict[str, str] = {}
+    used: set[str] = set()
+    for article in ordered:
+        article_id = str(article["id"])
+        base = article_title_slug(str(article.get("title") or ""))
+        candidate = base
+        if candidate in used:
+            identity = "".join(
+                character
+                for character in article_id.casefold()
+                if character.isalnum()
+            )
+            identity = identity or "article"
+            prefix_length = min(8, len(identity))
+            while True:
+                candidate = f"{base}-{identity[:prefix_length]}"
+                if candidate not in used:
+                    break
+                if prefix_length < len(identity):
+                    prefix_length = min(prefix_length + 4, len(identity))
+                    continue
+                suffix = 2
+                while f"{candidate}-{suffix}" in used:
+                    suffix += 1
+                candidate = f"{candidate}-{suffix}"
+                break
+        assigned[article_id] = candidate
+        used.add(candidate)
+    return assigned
 
 
 SCHEMA = """
@@ -630,20 +708,43 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """SELECT a.id, a.research_id, a.title, a.created_at, a.updated_at,
-                          r.status AS research_status, r.metric_name, r.best_value
+                          r.status AS research_status, r.metric_name, r.best_value,
+                          r.original_prompt
                    FROM articles a JOIN researches r ON r.id = a.research_id
                    ORDER BY a.updated_at DESC"""
             ).fetchall()
-        return [self._record(row) or {} for row in rows]
+        records = [self._record(row) or {} for row in rows]
+        slugs = article_slug_map(records)
+        for record in records:
+            record["slug"] = slugs[record["id"]]
+        return records
 
-    def get_article(self, article_id: str) -> dict[str, Any] | None:
+    def get_article(self, article_identifier: str) -> dict[str, Any] | None:
         with self.connect() as connection:
+            identity_rows = connection.execute(
+                "SELECT id, title, created_at FROM articles"
+            ).fetchall()
+            identities = [self._record(row) or {} for row in identity_rows]
+            slugs = article_slug_map(identities)
+            article_id = article_identifier
+            if article_identifier not in slugs:
+                article_id = next(
+                    (
+                        identifier
+                        for identifier, slug in slugs.items()
+                        if slug == article_identifier
+                    ),
+                    "",
+                )
             row = connection.execute(
                 """SELECT a.*, r.status AS research_status, r.metric_name, r.best_value
                    FROM articles a JOIN researches r ON r.id = a.research_id WHERE a.id = ?""",
                 (article_id,),
             ).fetchone()
-        return self._record(row)
+        record = self._record(row)
+        if record is not None:
+            record["slug"] = slugs[record["id"]]
+        return record
 
     def get_article_by_research(self, research_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:

@@ -95,9 +95,11 @@ export interface GpuSource {
 
 export interface Article {
   id: string;
+  slug: string;
   research_id: string;
   title: string;
   markdown?: string;
+  article_kind?: "general" | "technical";
   metric_name?: string;
   metric_direction?: MetricDirection;
   objective?: string;

@@ -11,6 +11,7 @@ import {
   getResearch,
   researchEventsUrl,
 } from "@/lib/api";
+import { articlePath } from "@/lib/article-url";
 import { formatMetric, metricDescription, metricLabel } from "@/lib/format";
 import type { Article, GpuTelemetry, Research } from "@/lib/types";
 import { GpuPerformance } from "./gpu-performance";
@@ -210,7 +211,10 @@ export function ResearchLiveView({
         {error ? <motion.p className="inline-error research-error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="alert">{error}</motion.p> : null}
         {article ? (
           <motion.div className="article-ready" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
-            Article built from recorded experiments. <Link href={`/articles/${article.id}`}>Open article</Link>
+            {article.article_kind === "general"
+              ? "Reader guide built from the original question. "
+              : "Article built from recorded experiments. "}
+            <Link href={articlePath(article)}>Open article</Link>
           </motion.div>
         ) : null}
       </AnimatePresence>

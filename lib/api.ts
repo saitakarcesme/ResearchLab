@@ -173,8 +173,8 @@ export async function listArticles(): Promise<Article[]> {
   return unwrapList(await request<Article[] | { items: Article[] }>("/api/articles"));
 }
 
-export function getArticle(id: string): Promise<Article> {
-  return request(`/api/articles/${encodeURIComponent(id)}`);
+export function getArticle(identifier: string): Promise<Article> {
+  return request(`/api/articles/${encodeURIComponent(identifier)}`);
 }
 
 export function researchEventsUrl(id: string): string {

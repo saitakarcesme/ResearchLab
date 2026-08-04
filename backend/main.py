@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, st
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from backend.article import generate_article_markdown
+from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
 from backend.config import Settings
 from backend.db import Database
@@ -51,6 +51,7 @@ def _control_error(exc: Exception) -> HTTPException:
 def create_app(
     settings: Settings | None = None,
     brief_generator: CodexResearchBriefGenerator | None = None,
+    article_generator: ResearchArticleGenerator | None = None,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
 
@@ -84,6 +85,9 @@ def create_app(
         app.state.telemetry = telemetry
         app.state.supervisor = supervisor
         app.state.brief_generator = brief_generator or CodexResearchBriefGenerator(
+            configured
+        )
+        app.state.article_generator = article_generator or ResearchArticleGenerator(
             configured
         )
         try:
@@ -403,12 +407,16 @@ def create_app(
 
     @app.get("/api/articles")
     def list_articles(request: Request) -> list[dict[str, Any]]:
-        return _database(request).list_articles()
+        articles = _database(request).list_articles()
+        for article in articles:
+            article["article_kind"] = article_kind(article)
+            article.pop("original_prompt", None)
+        return articles
 
-    @app.get("/api/articles/{article_id}")
-    def get_article(article_id: str, request: Request) -> dict[str, Any]:
+    @app.get("/api/articles/{article_identifier}")
+    def get_article(article_identifier: str, request: Request) -> dict[str, Any]:
         database = _database(request)
-        article = database.get_article(article_id)
+        article = database.get_article(article_identifier)
         if article is None:
             raise _not_found("Article")
         research = database.get_research(article["research_id"], detail=True)
@@ -419,6 +427,7 @@ def create_app(
                     "baseline_value": research["baseline_value"],
                     "metric_direction": research["metric_direction"],
                     "experiments": research["experiments"],
+                    "article_kind": article_kind(research),
                 }
             )
         return article
@@ -431,12 +440,18 @@ def create_app(
             raise _not_found("Research")
         experiments = database.list_experiments(research_id)
         logs = database.list_logs(research_id, limit=1_000_000)
-        markdown = generate_article_markdown(research, experiments, logs)
+        markdown = request.app.state.article_generator.generate(
+            research, experiments, logs
+        )
         article = database.upsert_article(research_id, research["title"], markdown)
+        article["article_kind"] = article_kind(research)
         database.add_log(
             research_id,
             "article_generated",
-            "Article regenerated from persisted experiments and logs.",
+            (
+                "Reader-focused article regenerated from the original question and "
+                "relevant persisted evidence."
+            ),
         )
         return article
 

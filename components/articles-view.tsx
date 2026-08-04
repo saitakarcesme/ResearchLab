@@ -4,6 +4,7 @@ import { ArrowUpRight, BookOpen, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { listArticles } from "@/lib/api";
+import { articlePath } from "@/lib/article-url";
 import { formatMetric, metricLabel } from "@/lib/format";
 import type { Article } from "@/lib/types";
 
@@ -33,15 +34,19 @@ export function ArticlesView() {
       ) : error ? null : articles.length ? (
         <div className="article-shelf">
           {articles.map((article, index) => (
-            <Link className={`article-cover cover-${index % 4}`} href={`/articles/${article.id}`} key={article.id}>
+            <Link className={`article-cover cover-${index % 4}`} href={articlePath(article)} key={article.id}>
               <div className="cover-sheen" aria-hidden="true" />
               <BookOpen size={18} strokeWidth={1.6} />
               <div className="cover-title">
-                <span>Research note</span>
+                <span>{article.article_kind === "general" ? "Practical guide" : "Research note"}</span>
                 <h2>{article.title}</h2>
               </div>
               <div className="cover-footer">
-                <span>{article.metric_name ? metricLabel(article.metric_name) : "Research result"}{article.best_value != null ? ` · ${formatMetric(article.best_value)}` : ""}</span>
+                <span>
+                  {article.article_kind === "general"
+                    ? "Reader guide"
+                    : `${article.metric_name ? metricLabel(article.metric_name) : "Research result"}${article.best_value != null ? ` · ${formatMetric(article.best_value)}` : ""}`}
+                </span>
                 <ArrowUpRight size={16} />
               </div>
             </Link>

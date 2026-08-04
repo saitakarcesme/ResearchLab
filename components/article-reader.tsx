@@ -6,6 +6,7 @@ import { Children, isValidElement, useEffect, useState, type ReactNode } from "r
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getArticle } from "@/lib/api";
+import { articlePath } from "@/lib/article-url";
 import { formatMetric, metricLabel } from "@/lib/format";
 import type { Article } from "@/lib/types";
 import { ArticleResultChart } from "./article-result-chart";
@@ -76,18 +77,25 @@ function ArticleMarkdown({ markdown }: { markdown: string }) {
   );
 }
 
-export function ArticleReader({ articleId }: { articleId: string }) {
+export function ArticleReader({ articleIdentifier }: { articleIdentifier: string }) {
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
-    getArticle(articleId)
-      .then((value) => mounted && setArticle(value))
+    getArticle(articleIdentifier)
+      .then((value) => {
+        if (!mounted) return;
+        setArticle(value);
+        const canonicalPath = articlePath(value);
+        if (window.location.pathname !== canonicalPath) {
+          window.history.replaceState(window.history.state, "", canonicalPath);
+        }
+      })
       .catch((nextError) => mounted && setError(nextError instanceof Error ? nextError.message : "Article is unavailable."));
     return () => { mounted = false; };
-  }, [articleId, retryKey]);
+  }, [articleIdentifier, retryKey]);
 
   if (!article) {
     if (error) {
@@ -114,7 +122,8 @@ export function ArticleReader({ articleId }: { articleId: string }) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(article.updated_at || article.created_at));
-  const metricSummary = article.metric_name
+  const isGeneral = article.article_kind === "general";
+  const metricSummary = !isGeneral && article.metric_name
     ? `${metricLabel(article.metric_name)}${article.best_value != null ? ` ${formatMetric(article.best_value)}` : ""}`
     : null;
 
@@ -138,7 +147,7 @@ export function ArticleReader({ articleId }: { articleId: string }) {
         <article className="article-reader">
           <header className="article-header">
             <div className="article-meta">
-              <span>Research journal</span>
+              <span>{isGeneral ? "Practical guide" : "Research journal"}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={article.updated_at || article.created_at}>{publishedAt}</time>
               <span aria-hidden="true">·</span>
@@ -149,7 +158,7 @@ export function ArticleReader({ articleId }: { articleId: string }) {
           </header>
           <div className="markdown-body">
             <ArticleMarkdown markdown={introduction} />
-            <ArticleResultChart article={article} />
+            {!isGeneral ? <ArticleResultChart article={article} /> : null}
             <ArticleMarkdown markdown={body} />
           </div>
         </article>
