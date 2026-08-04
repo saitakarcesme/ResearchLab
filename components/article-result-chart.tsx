@@ -64,6 +64,7 @@ export function ArticleResultChart({ article }: { article: Article }) {
     article.metric_direction ?? "lower_is_better",
   );
   const completedTests = article.experiments?.filter((experiment) => experiment.completed_at).length ?? 0;
+  const directionVerb = article.metric_direction === "higher_is_better" ? "rose" : "fell";
 
   return (
     <figure className="article-result-chart" aria-labelledby="article-chart-title">
@@ -131,7 +132,7 @@ export function ArticleResultChart({ article }: { article: Article }) {
         </ResponsiveContainer>
       </div>
       <figcaption>
-        Best-so-far improvement across {completedTests} completed tests. {metricDescription(article.metric_name ?? "val_bpb")} {metricLabel(article.metric_name ?? "val_bpb")} fell from {formatMetric(article.baseline_value)} to {formatMetric(article.best_value)}.
+        Best-so-far improvement across {completedTests} completed tests. {metricDescription(article.metric_name ?? "val_bpb")} {metricLabel(article.metric_name ?? "val_bpb")} {directionVerb} from {formatMetric(article.baseline_value)} to {formatMetric(article.best_value)}.
       </figcaption>
     </figure>
   );

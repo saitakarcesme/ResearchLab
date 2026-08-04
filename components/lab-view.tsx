@@ -1,15 +1,24 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, ChevronRight, LoaderCircle } from "lucide-react";
+import { ArrowUp, ChevronRight, Gauge, ListPlus, LoaderCircle, Play, Wrench } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { controlResearch, createResearch, getGpuTelemetry, listGpuSources, listResearches } from "@/lib/api";
+import { createResearch, getGpuTelemetry, listGpuSources, listLocalModels, listResearches } from "@/lib/api";
 import { formatMetric, metricLabel } from "@/lib/format";
-import type { GpuSource, GpuTelemetry, Research } from "@/lib/types";
+import type { GpuSource, GpuTelemetry, LocalModel, Research, ResearchType } from "@/lib/types";
 import { GpuLineBackdrop } from "./gpu-line-backdrop";
 import { ResearchLiveView } from "./research-live-view";
 import { StatusPill } from "./status-pill";
+
+function modelName(modelId: string | null | undefined): string | null {
+  return modelId?.replace(/^ollama:/, "").replace(/:latest$/, "") ?? null;
+}
+
+function modelOption(model: LocalModel): string {
+  const details = [model.parameter_size, model.quantization_level].filter(Boolean).join(" · ");
+  return `${model.name}${details ? ` — ${details}` : ""}${model.recommended ? " · recommended" : ""}`;
+}
 
 export function LabView() {
   const [prompt, setPrompt] = useState("");
@@ -17,12 +26,18 @@ export function LabView() {
   const [researches, setResearches] = useState<Research[]>([]);
   const [sources, setSources] = useState<GpuSource[]>([]);
   const [selectedSource, setSelectedSource] = useState("");
+  const [researchType, setResearchType] = useState<ResearchType>("training_optimization");
+  const [models, setModels] = useState<LocalModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   const [allocation, setAllocation] = useState(100);
   const [telemetry, setTelemetry] = useState<GpuTelemetry | null>(null);
   const [activeResearch, setActiveResearch] = useState<Research | null>(null);
   const [loading, setLoading] = useState(true);
-  const [starting, setStarting] = useState(false);
+  const [launching, setLaunching] = useState<"queue" | "run" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
   const sourceSelectRef = useRef<HTMLSelectElement>(null);
   const wasConfiguringRef = useRef(false);
@@ -81,6 +96,39 @@ export function LabView() {
     return () => window.cancelAnimationFrame(frame);
   }, [pendingPrompt]);
 
+  const selectedSourceType = sources.find((source) => source.id === selectedSource)?.type;
+
+  useEffect(() => {
+    if (!pendingPrompt || researchType !== "local_model_benchmark" || selectedSourceType !== "local" || !selectedSource) return;
+
+    let cancelled = false;
+    void listLocalModels(selectedSource)
+      .then((catalog) => {
+        if (cancelled) return;
+        setModels(catalog.models);
+        setModelError(null);
+        setSelectedModel((current) => {
+          if (catalog.models.some((model) => model.id === current)) return current;
+          return catalog.models.find((model) => model.recommended)?.id ?? catalog.models[0]?.id ?? "";
+        });
+        if (!catalog.models.length) {
+          setModelError("No completion-capable Ollama models are installed.");
+        }
+      })
+      .catch((nextError) => {
+        if (cancelled) return;
+        setModels([]);
+        setSelectedModel("");
+        setModelError(nextError instanceof Error ? nextError.message : "Could not read the installed models.");
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingPrompt, researchType, selectedSource, selectedSourceType]);
+
   const visibleResearches = useMemo(
     () => [...researches].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 6),
     [researches],
@@ -92,39 +140,66 @@ export function LabView() {
     if (!value) return;
     setPendingPrompt(value);
     setError(null);
+    setNotice(null);
+    if (researchType === "local_model_benchmark") setModelsLoading(true);
   }
 
-  async function launch() {
-    if (!pendingPrompt || !selectedSource) return;
-    setStarting(true);
+  function chooseResearchType(nextType: ResearchType) {
+    setResearchType(nextType);
     setError(null);
+    setModelError(null);
+    setModels([]);
+    setSelectedModel("");
+    setModelsLoading(nextType === "local_model_benchmark");
+    if (nextType === "local_model_benchmark" && selectedSourceType !== "local") {
+      const localSource = sources.find((source) => source.type === "local");
+      if (localSource) {
+        setSelectedSource(localSource.id);
+      } else {
+        setModelsLoading(false);
+        setModelError("No local GPU source is configured.");
+      }
+    }
+  }
+
+  async function launch(autoStart: boolean) {
+    if (!pendingPrompt || !selectedSource) return;
+    if (researchType === "local_model_benchmark" && !selectedModel) {
+      setError("Choose an installed local model before continuing.");
+      return;
+    }
+    setLaunching(autoStart ? "run" : "queue");
+    setError(null);
+    setNotice(null);
     try {
       const created = await createResearch({
         original_prompt: pendingPrompt,
         gpu_source_id: selectedSource,
         target_gpu_allocation: allocation,
-        auto_start: false,
+        auto_start: autoStart,
+        research_type: researchType,
+        ...(researchType === "local_model_benchmark"
+          ? { model_id: selectedModel, benchmark_profile: "ollama-text-v1" as const }
+          : {}),
       });
-      setActiveResearch(created);
       setPrompt("");
       setPendingPrompt(null);
-      let startFailure: string | null = null;
-      try {
-        const started = await controlResearch(created.id, "start");
-        setActiveResearch(started);
-      } catch (startError) {
-        startFailure = startError instanceof Error ? startError.message : "Research was created but could not start.";
-      }
       await load();
-      if (startFailure) setError(startFailure);
-      window.requestAnimationFrame(() => liveRef.current?.scrollIntoView({
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-        block: "start",
-      }));
+      if (autoStart) {
+        setActiveResearch(created);
+        window.requestAnimationFrame(() => liveRef.current?.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+          block: "start",
+        }));
+      } else {
+        setNotice(created.queue_position
+          ? `Added to queue at position ${created.queue_position}.`
+          : "Added to the research queue.");
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not start research.");
+      setError(nextError instanceof Error ? nextError.message : "Could not create research.");
     } finally {
-      setStarting(false);
+      setLaunching(null);
     }
   }
 
@@ -171,26 +246,108 @@ export function LabView() {
               role="region"
               aria-label="Research run configuration"
             >
-              <label>
-                <span>GPU</span>
-                <select ref={sourceSelectRef} value={selectedSource} onChange={(event) => setSelectedSource(event.target.value)}>
-                  {sources.map((source) => <option value={source.id} key={source.id}>{source.name}</option>)}
-                </select>
-              </label>
-              <label className="allocation-control">
-                <span>GPU scheduling share <strong>{allocation}%</strong></span>
-                <input type="range" min={10} max={100} step={5} value={allocation} onChange={(event) => setAllocation(Number(event.target.value))} />
-                <small>{allocation}% requests this scheduling share while a GPU test is running.</small>
-              </label>
-              <button className="primary-button" type="button" disabled={starting || !selectedSource} onClick={() => void launch()}>
-                {starting ? <LoaderCircle className="spin" size={16} /> : <ArrowUp size={16} />}
-                Start research
-              </button>
+              <fieldset className="launch-methods">
+                <legend>What should the lab test?</legend>
+                <label className={researchType === "training_optimization" ? "launch-method-active" : ""}>
+                  <input
+                    type="radio"
+                    name="research-method"
+                    value="training_optimization"
+                    checked={researchType === "training_optimization"}
+                    onChange={() => chooseResearchType("training_optimization")}
+                  />
+                  <Wrench size={16} aria-hidden="true" />
+                  <span><strong>Training optimization</strong><small>Improve the built-in training run.</small></span>
+                </label>
+                <label className={researchType === "local_model_benchmark" ? "launch-method-active" : ""}>
+                  <input
+                    type="radio"
+                    name="research-method"
+                    value="local_model_benchmark"
+                    checked={researchType === "local_model_benchmark"}
+                    onChange={() => chooseResearchType("local_model_benchmark")}
+                  />
+                  <Gauge size={16} aria-hidden="true" />
+                  <span><strong>Local model benchmark</strong><small>Measure a real installed Ollama model.</small></span>
+                </label>
+              </fieldset>
+
+              <div className="launch-fields">
+                <label>
+                  <span>GPU</span>
+                  <select
+                    ref={sourceSelectRef}
+                    value={selectedSource}
+                    onChange={(event) => {
+                      setSelectedSource(event.target.value);
+                      if (researchType === "local_model_benchmark") {
+                        setModelsLoading(true);
+                        setModelError(null);
+                      }
+                    }}
+                  >
+                    {sources.map((source) => (
+                      <option
+                        value={source.id}
+                        key={source.id}
+                        disabled={researchType === "local_model_benchmark" && source.type !== "local"}
+                      >
+                        {source.name}{source.type === "remote" ? " · remote" : " · this computer"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {researchType === "local_model_benchmark" ? (
+                  <label>
+                    <span>Installed model</span>
+                    <select
+                      value={selectedModel}
+                      disabled={modelsLoading || !models.length}
+                      onChange={(event) => setSelectedModel(event.target.value)}
+                    >
+                      {modelsLoading ? <option value="">Reading Ollama models…</option> : null}
+                      {!modelsLoading && !models.length ? <option value="">No compatible models found</option> : null}
+                      {models.map((model) => <option value={model.id} key={model.id}>{modelOption(model)}</option>)}
+                    </select>
+                    <small className="launch-field-note">Four repeatable profiles; speed is measured in output tokens per second.</small>
+                    {modelError ? <small className="launch-field-error" role="alert">{modelError}</small> : null}
+                  </label>
+                ) : null}
+
+                <label className="allocation-control">
+                  <span>GPU scheduling share <strong>{allocation}%</strong></span>
+                  <input type="range" min={10} max={100} step={5} value={allocation} onChange={(event) => setAllocation(Number(event.target.value))} />
+                  <small>{allocation}% requests this scheduling share while a GPU test is running.</small>
+                </label>
+              </div>
+
+              <div className="launch-actions">
+                <button
+                  className="queue-button"
+                  type="button"
+                  disabled={launching != null || !selectedSource || (researchType === "local_model_benchmark" && !selectedModel)}
+                  onClick={() => void launch(false)}
+                >
+                  {launching === "queue" ? <LoaderCircle className="spin" size={16} /> : <ListPlus size={16} />}
+                  Add to queue
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={launching != null || !selectedSource || (researchType === "local_model_benchmark" && !selectedModel)}
+                  onClick={() => void launch(true)}
+                >
+                  {launching === "run" ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}
+                  Run now
+                </button>
+              </div>
             </motion.div>
           ) : null}
         </AnimatePresence>
 
         {error ? <p className="inline-error lab-error" role="alert">{error}</p> : null}
+        {notice ? <p className="launch-notice" role="status">{notice}</p> : null}
 
         <AnimatePresence initial={false}>
           {!prompt.trim() && !pendingPrompt && !activeResearch ? (
@@ -206,10 +363,11 @@ export function LabView() {
               ) : visibleResearches.length ? visibleResearches.map((research) => (
                 <Link className="recent-row" href={`/researches/${research.id}`} key={research.id}>
                   <strong>{research.title}</strong>
-                  <StatusPill status={research.status} />
+                  <StatusPill status={research.status} queuePosition={research.queue_position} />
                   <span>
-                    {research.experiment_count ?? research.experiments?.length ?? 0} experiments
-                    {research.best_value != null ? ` · ${metricLabel(research.metric_name)} ${formatMetric(research.best_value)}` : ""}
+                    {research.status === "queued"
+                      ? `${modelName(research.model_id) ?? "Training run"} · waiting for GPU`
+                      : `${research.experiment_count ?? research.experiments?.length ?? 0} experiments${research.best_value != null ? ` · ${metricLabel(research.metric_name)} ${formatMetric(research.best_value)}` : ""}`}
                   </span>
                   <ChevronRight size={15} aria-hidden="true" />
                 </Link>

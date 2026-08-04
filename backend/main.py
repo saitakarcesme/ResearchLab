@@ -14,6 +14,7 @@ from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
 from backend.config import Settings
 from backend.db import Database
+from backend.local_models import OllamaClient, OllamaConnectionError
 from backend.schemas import (
     GpuSourceCreate,
     GpuSourceUpdate,
@@ -34,6 +35,10 @@ def _supervisor(request: Request) -> ResearchSupervisor:
 
 def _telemetry(request: Request) -> TelemetryService:
     return request.app.state.telemetry
+
+
+def _ollama(request: Request) -> OllamaClient:
+    return request.app.state.ollama
 
 
 def _not_found(kind: str) -> HTTPException:
@@ -83,6 +88,7 @@ def create_app(
         app.state.settings = configured
         app.state.database = database
         app.state.telemetry = telemetry
+        app.state.ollama = OllamaClient()
         app.state.supervisor = supervisor
         app.state.brief_generator = brief_generator or CodexResearchBriefGenerator(
             configured
@@ -169,6 +175,24 @@ def create_app(
             raise _not_found("GPU source")
         return _telemetry(request).sample(source)
 
+    @app.get("/api/gpu-sources/{source_id}/models")
+    def list_local_models(source_id: str, request: Request) -> dict[str, Any]:
+        source = _database(request).get_gpu_source(source_id)
+        if source is None:
+            raise _not_found("GPU source")
+        if source["type"] != "local":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Remote model catalogs are separate from this computer. Add a "
+                    "remote runtime before selecting models on that source."
+                ),
+            )
+        try:
+            return _ollama(request).completion_models()
+        except OllamaConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/api/telemetry/local")
     def local_telemetry(request: Request) -> dict[str, Any]:
         source = next(
@@ -210,15 +234,57 @@ def create_app(
                     status_code=409, detail="No GPU source is configured"
                 )
             source_id = local["id"]
-        if database.get_gpu_source(source_id) is None:
+        source = database.get_gpu_source(source_id)
+        if source is None:
             raise _not_found("GPU source")
-        brief = request.app.state.brief_generator.generate(
-            payload.original_prompt,
-            supplied_title=payload.title,
-            supplied_objective=payload.objective,
-        )
-        research = database.create_research(
-            {
+        brief = None
+        values: dict[str, Any]
+        if payload.research_type == "local_model_benchmark":
+            if source["type"] != "local":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Local-model benchmarks currently require the local GPU source",
+                )
+            assert payload.model_id is not None
+            try:
+                installed = _ollama(request).resolve(payload.model_id)
+                shown = _ollama(request).show(installed.name)
+            except (OllamaConnectionError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if "completion" not in (shown.get("capabilities") or []):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected Ollama model cannot generate text",
+                )
+            display_name = installed.name.removesuffix(":latest")
+            values = {
+                "title": payload.title or f"{display_name} Local Inference Efficiency",
+                "original_prompt": payload.original_prompt,
+                "objective": payload.objective
+                or (
+                    f"Measure {installed.name} with the same prompt and output length "
+                    "across four context and batch profiles. Maximize median warm output "
+                    "tokens per second while requiring the model to remain fully on the GPU."
+                ),
+                "metric_name": "output_tokens_per_second",
+                "metric_direction": "higher_is_better",
+                "gpu_source_id": source_id,
+                "target_gpu_allocation": payload.target_gpu_allocation,
+                "adapter_type": "ollama_benchmark",
+                "research_type": payload.research_type,
+                "model_id": installed.id,
+                "model_digest": installed.digest,
+                "model_runtime": _ollama(request).base_url,
+                "benchmark_profile": payload.benchmark_profile or "ollama-text-v1",
+                "status": "stopped" if payload.auto_start else "queued",
+            }
+        else:
+            brief = request.app.state.brief_generator.generate(
+                payload.original_prompt,
+                supplied_title=payload.title,
+                supplied_objective=payload.objective,
+            )
+            values = {
                 "title": brief.title,
                 "original_prompt": payload.original_prompt,
                 "objective": brief.objective,
@@ -227,21 +293,44 @@ def create_app(
                 "gpu_source_id": source_id,
                 "target_gpu_allocation": payload.target_gpu_allocation,
                 "adapter_type": "karpathy_autoresearch",
+                "research_type": payload.research_type,
+                "status": "stopped" if payload.auto_start else "queued",
             }
+        research = database.create_research(
+            values
         )
         database.add_log(
             research["id"],
             "research_created",
-            "Research created. Real execution begins only after an explicit start request.",
+            (
+                "Research created for an explicit immediate start."
+                if payload.auto_start
+                else "Research created and added to the persistent GPU queue."
+            ),
         )
-        if brief.warning:
+        if payload.research_type == "local_model_benchmark":
+            database.add_log(
+                research["id"],
+                "model_selected",
+                (
+                    f"Pinned {values['model_id']} at digest "
+                    f"{str(values['model_digest'])[:12]} for a reproducible local benchmark."
+                ),
+                data={
+                    "model_id": values["model_id"],
+                    "model_digest": values["model_digest"],
+                    "benchmark_profile": values["benchmark_profile"],
+                    "ollama_endpoint": _ollama(request).base_url,
+                },
+            )
+        elif brief and brief.warning:
             database.add_log(
                 research["id"],
                 "research_brief_fallback",
                 brief.warning,
                 level="warning",
             )
-        elif brief.used_ai:
+        elif brief and brief.used_ai:
             database.add_log(
                 research["id"],
                 "research_brief_generated",
@@ -252,7 +341,36 @@ def create_app(
                 return _supervisor(request).start(research["id"])
             except Exception as exc:
                 raise _control_error(exc) from exc
+        database.add_log(
+            research["id"],
+            "research_queued",
+            "Research is waiting for its GPU source to become available.",
+        )
+        _supervisor(request).notify_queue()
         return database.get_research(research["id"], detail=True) or research
+
+    @app.get("/api/researches/queue")
+    def list_research_queue(
+        request: Request,
+        gpu_source_id: str | None = Query(default=None),
+    ) -> list[dict[str, Any]]:
+        database = _database(request)
+        if gpu_source_id is not None and database.get_gpu_source(gpu_source_id) is None:
+            raise _not_found("GPU source")
+        return database.list_queued_researches(gpu_source_id)
+
+    @app.post("/api/researches/queue/start-next")
+    def start_next_research(
+        request: Request,
+        gpu_source_id: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        database = _database(request)
+        if gpu_source_id is not None and database.get_gpu_source(gpu_source_id) is None:
+            raise _not_found("GPU source")
+        try:
+            return {"started": _supervisor(request).start_next(gpu_source_id)}
+        except Exception as exc:
+            raise _control_error(exc) from exc
 
     @app.get("/api/researches/{research_id}")
     def get_research(research_id: str, request: Request) -> dict[str, Any]:
@@ -272,10 +390,10 @@ def create_app(
         current = database.get_research(research_id)
         if current is None:
             raise _not_found("Research")
-        if current["status"] in {"running", "paused"}:
+        if current["status"] in {"queued", "running", "paused"}:
             raise HTTPException(
                 status_code=409,
-                detail="Stop the research before changing its execution settings",
+                detail="Dequeue or stop the research before changing its execution settings",
             )
         values = payload.model_dump(exclude_unset=True)
         if (
@@ -288,19 +406,36 @@ def create_app(
     @app.delete("/api/researches/{research_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_research(research_id: str, request: Request) -> Response:
         database = _database(request)
-        if database.get_research(research_id) is None:
+        research = database.get_research(research_id)
+        if research is None:
             raise _not_found("Research")
         if not database.delete_research(research_id):
             raise HTTPException(
                 status_code=409,
                 detail="Stop the research before deleting its database record",
             )
+        if research["status"] == "queued":
+            _supervisor(request).notify_queue()
         return Response(status_code=204)
 
     @app.post("/api/researches/{research_id}/start")
     def start_research(research_id: str, request: Request) -> dict[str, Any]:
         try:
             return _supervisor(request).start(research_id)
+        except Exception as exc:
+            raise _control_error(exc) from exc
+
+    @app.post("/api/researches/{research_id}/enqueue")
+    def enqueue_research(research_id: str, request: Request) -> dict[str, Any]:
+        try:
+            return _supervisor(request).enqueue(research_id)
+        except Exception as exc:
+            raise _control_error(exc) from exc
+
+    @app.post("/api/researches/{research_id}/dequeue")
+    def dequeue_research(research_id: str, request: Request) -> dict[str, Any]:
+        try:
+            return _supervisor(request).dequeue(research_id)
         except Exception as exc:
             raise _control_error(exc) from exc
 
@@ -426,6 +561,8 @@ def create_app(
                     "objective": research["objective"],
                     "baseline_value": research["baseline_value"],
                     "metric_direction": research["metric_direction"],
+                    "research_type": research.get("research_type"),
+                    "model_id": research.get("model_id"),
                     "experiments": research["experiments"],
                     "article_kind": article_kind(research),
                 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { BookOpen, LoaderCircle, Pause, Play, Square } from "lucide-react";
+import { BookOpen, ListX, LoaderCircle, Pause, Play, Square } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -61,12 +61,20 @@ export function ResearchLiveView({
     events.onmessage = handleEvent;
     [
       "research_created",
+      "research_queued",
+      "research_dequeued",
       "research_started",
+      "research_start_failed",
       "research_ready",
       "research_paused",
       "research_resumed",
       "research_stopped",
       "research_failed",
+      "research_completed",
+      "model_selected",
+      "model_verified",
+      "model_warmed",
+      "model_unload_warning",
       "environment_started",
       "environment_ready",
       "gpu_profile_applied",
@@ -110,7 +118,7 @@ export function ResearchLiveView({
     };
   }, [research?.gpu_source_id]);
 
-  async function runControl(action: "pause" | "resume" | "stop" | "start") {
+  async function runControl(action: "pause" | "resume" | "stop" | "start" | "dequeue") {
     setBusyAction(action);
     setError(null);
     try {
@@ -146,7 +154,8 @@ export function ResearchLiveView({
 
   const canPause = research.status === "running";
   const canResume = research.status === "paused";
-  const canStart = research.status === "stopped" || research.status === "failed";
+  const canStart = research.status === "queued" || research.status === "stopped" || research.status === "failed";
+  const canDequeue = research.status === "queued";
   const canStop = research.status === "running" || research.status === "paused";
   const hasActiveExperiment = research.experiments?.some(
     (experiment) => experiment.started_at && !experiment.completed_at,
@@ -171,19 +180,25 @@ export function ResearchLiveView({
         <div>
           <div className="research-title-line">
             <h1>{research.title}</h1>
-            <StatusPill status={research.status} />
+            <StatusPill status={research.status} queuePosition={research.queue_position} />
           </div>
           <div className="research-metric-line">
             <span>{metricLabel(research.metric_name)}</span>
             <strong>{formatMetric(research.best_value ?? research.baseline_value)}</strong>
             <span>{metricDescription(research.metric_name)}</span>
+            {research.model_id ? <span className="research-model-name">{research.model_id.replace(/^ollama:/, "").replace(/:latest$/, "")}</span> : null}
           </div>
         </div>
 
         <div className="research-actions" aria-label="Research controls">
           {canStart ? (
             <button className="control-button primary-control" type="button" disabled={busyAction != null} onClick={() => void runControl("start")}>
-              <Play size={15} fill="currentColor" /> Start
+              <Play size={15} fill="currentColor" /> {research.status === "queued" ? "Run now" : "Start"}
+            </button>
+          ) : null}
+          {canDequeue ? (
+            <button className="control-button" type="button" disabled={busyAction != null} onClick={() => void runControl("dequeue")}>
+              <ListX size={15} /> Remove from queue
             </button>
           ) : null}
           {canPause ? (

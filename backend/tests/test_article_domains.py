@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from backend.article import (
     ResearchArticleGenerator,
     article_kind,
+    generate_article_markdown,
     generate_general_article_markdown,
 )
 from backend.db import Database
@@ -52,6 +53,48 @@ def test_article_kind_uses_the_original_question_instead_of_adapter_boilerplate(
     assert article_kind({"original_prompt": "Düzenli okuma alışkanlığı nasıl kurulur?"}) == (
         "general"
     )
+
+
+def test_local_model_research_is_a_reader_friendly_technical_article() -> None:
+    research = {
+        "title": "Test Model Local Inference Efficiency",
+        "original_prompt": "Measure the speed of this local language model",
+        "objective": "Compare reproducible warm generation profiles.",
+        "research_type": "local_model_benchmark",
+        "model_id": "ollama:test-model:latest",
+        "metric_name": "output_tokens_per_second",
+        "metric_direction": "higher_is_better",
+        "baseline_value": 40.0,
+        "best_value": 52.0,
+    }
+    experiments = [
+        {
+            "experiment_number": 1,
+            "hypothesis": "Establish the compact-context baseline.",
+            "change_summary": "Run three times with a 2,048-token context and batch 256.",
+            "metric_value": 40.0,
+            "previous_best": None,
+            "accepted": True,
+            "error": None,
+        },
+        {
+            "experiment_number": 2,
+            "hypothesis": "A larger processing batch may improve throughput.",
+            "change_summary": "Run three times with a 2,048-token context and batch 512.",
+            "metric_value": 52.0,
+            "previous_best": 40.0,
+            "accepted": True,
+            "error": None,
+        },
+    ]
+
+    markdown = generate_article_markdown(research, experiments, [])
+
+    assert article_kind(research) == "technical"
+    assert "generation speed" in markdown
+    assert "`test-model:latest`" in markdown
+    assert "does not compare answer quality" in markdown
+    assert "output_tokens_per_second" not in markdown
 
 
 def test_general_fallback_ignores_unrelated_software_experiments(settings) -> None:

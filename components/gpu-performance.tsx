@@ -88,7 +88,7 @@ export function GpuPerformance({
           ? `${target}% is the requested scheduling share. The GPU can rest while the next test is being planned.`
           : phase === "training"
             ? `${target}% is the requested scheduling share; the live number above is the measured load.`
-            : "The scheduler share applies again when GPU training resumes."}
+            : "The scheduler share applies again when this research resumes GPU work."}
       </p>
     </section>
   );

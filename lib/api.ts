@@ -1,4 +1,12 @@
-import type { Article, GpuSource, GpuTelemetry, Research } from "./types";
+import type {
+  Article,
+  BenchmarkProfile,
+  GpuSource,
+  GpuTelemetry,
+  LocalModelCatalog,
+  Research,
+  ResearchType,
+} from "./types";
 
 type ResearchPayload = Research & { gpu_name?: string | null };
 
@@ -119,6 +127,9 @@ export async function createResearch(input: {
   gpu_source_id: string;
   target_gpu_allocation: number;
   auto_start: boolean;
+  research_type: ResearchType;
+  model_id?: string;
+  benchmark_profile?: BenchmarkProfile;
 }): Promise<Research> {
   return normalizeResearch(await request<ResearchPayload>("/api/researches", {
     method: "POST",
@@ -128,7 +139,7 @@ export async function createResearch(input: {
 
 export async function controlResearch(
   id: string,
-  action: "start" | "pause" | "resume" | "stop",
+  action: "start" | "pause" | "resume" | "stop" | "enqueue" | "dequeue",
 ): Promise<Research> {
   return normalizeResearch(await request<ResearchPayload>(`/api/researches/${encodeURIComponent(id)}/${action}`, {
     method: "POST",
@@ -145,6 +156,10 @@ export function createArticle(researchId: string): Promise<Article> {
 
 export async function listGpuSources(): Promise<GpuSource[]> {
   return unwrapList(await request<GpuSource[] | { items: GpuSource[] }>("/api/gpu-sources"));
+}
+
+export function listLocalModels(sourceId: string): Promise<LocalModelCatalog> {
+  return request(`/api/gpu-sources/${encodeURIComponent(sourceId)}/models`);
 }
 
 export function createGpuSource(input: {

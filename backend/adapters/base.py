@@ -20,6 +20,22 @@ class ResearchRuntime(Protocol):
     def wait_until_running(self) -> bool: ...
 
 
+class ResearchComplete(Exception):
+    """Signal that a finite adapter completed its measured research plan."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class ResearchFailed(Exception):
+    """Signal that a finite adapter exhausted its reproducible attempts."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
 @dataclass(slots=True)
 class AdapterContext:
     settings: Settings

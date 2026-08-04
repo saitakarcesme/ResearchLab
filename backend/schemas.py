@@ -44,7 +44,26 @@ class ResearchCreate(StrictModel):
     target_gpu_allocation: int = Field(default=100, ge=1, le=100)
     title: str | None = Field(default=None, min_length=1, max_length=100)
     objective: str | None = Field(default=None, min_length=1, max_length=4000)
+    research_type: Literal[
+        "training_optimization", "local_model_benchmark"
+    ] = "training_optimization"
+    model_id: str | None = Field(default=None, min_length=1, max_length=300)
+    benchmark_profile: Literal["ollama-text-v1"] | None = None
     auto_start: bool = False
+
+    @model_validator(mode="after")
+    def validate_research_type(self) -> ResearchCreate:
+        if self.research_type == "local_model_benchmark":
+            if not self.model_id:
+                raise ValueError("A local model must be selected for this benchmark")
+            if not self.model_id.startswith("ollama:"):
+                raise ValueError("The selected local model must come from Ollama")
+            self.benchmark_profile = self.benchmark_profile or "ollama-text-v1"
+        elif self.model_id is not None or self.benchmark_profile is not None:
+            raise ValueError(
+                "Model fields are only valid for a local-model benchmark"
+            )
+        return self
 
 
 class ResearchUpdate(StrictModel):

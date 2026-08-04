@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import unicodedata
@@ -123,7 +124,7 @@ CREATE TABLE IF NOT EXISTS researches (
     title TEXT NOT NULL,
     original_prompt TEXT NOT NULL,
     objective TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('running', 'paused', 'completed', 'stopped', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'paused', 'completed', 'stopped', 'failed')),
     metric_name TEXT NOT NULL,
     metric_direction TEXT NOT NULL CHECK (metric_direction IN ('lower_is_better', 'higher_is_better')),
     baseline_value REAL,
@@ -133,6 +134,13 @@ CREATE TABLE IF NOT EXISTS researches (
     target_gpu_allocation INTEGER NOT NULL CHECK (target_gpu_allocation BETWEEN 1 AND 100),
     workspace_path TEXT,
     adapter_type TEXT NOT NULL DEFAULT 'karpathy_autoresearch',
+    research_type TEXT NOT NULL DEFAULT 'training_optimization',
+    model_id TEXT,
+    model_digest TEXT,
+    model_runtime TEXT,
+    benchmark_profile TEXT,
+    queued_at TEXT,
+    queue_order INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -228,6 +236,116 @@ class Database:
                 connection.execute(
                     "ALTER TABLE researches ADD COLUMN best_git_commit TEXT"
                 )
+                research_columns.add("best_git_commit")
+            table_sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'researches'"
+            ).fetchone()
+            table_sql = str(table_sql_row["sql"] if table_sql_row else "")
+            if "'queued'" not in table_sql:
+                self._migrate_researches_for_queue(
+                    connection, research_columns, table_sql
+                )
+            else:
+                if "queued_at" not in research_columns:
+                    connection.execute(
+                        "ALTER TABLE researches ADD COLUMN queued_at TEXT"
+                    )
+                if "queue_order" not in research_columns:
+                    connection.execute(
+                        "ALTER TABLE researches ADD COLUMN queue_order INTEGER"
+                    )
+            research_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(researches)"
+                ).fetchall()
+            }
+            model_columns = {
+                "research_type": "TEXT NOT NULL DEFAULT 'training_optimization'",
+                "model_id": "TEXT",
+                "model_digest": "TEXT",
+                "model_runtime": "TEXT",
+                "benchmark_profile": "TEXT",
+            }
+            for column, definition in model_columns.items():
+                if column not in research_columns:
+                    connection.execute(
+                        f"ALTER TABLE researches ADD COLUMN {column} {definition}"
+                    )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_researches_queue "
+                "ON researches(status, queue_order, queued_at)"
+            )
+
+    @staticmethod
+    def _migrate_researches_for_queue(
+        connection: sqlite3.Connection,
+        research_columns: set[str],
+        table_sql: str,
+    ) -> None:
+        """Rebuild the table while retaining columns added by other features."""
+
+        migration_sql = re.sub(
+            r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[\"`]researches[\"`]|researches)",
+            "CREATE TABLE researches_queue_migration",
+            table_sql,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        migration_sql = migration_sql.replace(
+            "status IN ('running'",
+            "status IN ('queued', 'running'",
+            1,
+        )
+        if (
+            not migration_sql.startswith("CREATE TABLE researches_queue_migration")
+            or "'queued'" not in migration_sql
+        ):
+            raise RuntimeError("Could not prepare the research queue schema migration")
+
+        if connection.in_transaction:
+            connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(migration_sql)
+            if "queued_at" not in research_columns:
+                connection.execute(
+                    "ALTER TABLE researches_queue_migration ADD COLUMN queued_at TEXT"
+                )
+            if "queue_order" not in research_columns:
+                connection.execute(
+                    "ALTER TABLE researches_queue_migration ADD COLUMN queue_order INTEGER"
+                )
+            copied_columns = ", ".join(
+                f'"{column.replace(chr(34), chr(34) * 2)}"'
+                for column in research_columns
+            )
+            connection.execute(
+                f"INSERT INTO researches_queue_migration ({copied_columns}) "
+                f"SELECT {copied_columns} FROM researches"
+            )
+            connection.execute("DROP TABLE researches")
+            connection.execute(
+                "ALTER TABLE researches_queue_migration RENAME TO researches"
+            )
+            connection.execute(
+                "CREATE INDEX idx_researches_status "
+                "ON researches(status, updated_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX idx_researches_queue "
+                "ON researches(status, queue_order, queued_at)"
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError("Research queue migration left invalid foreign keys")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -352,23 +470,43 @@ class Database:
 
     def create_research(self, values: Mapping[str, Any]) -> dict[str, Any]:
         research_id, now = str(uuid.uuid4()), utc_now()
+        initial_status = str(values.get("status", "stopped"))
+        if initial_status not in {"queued", "stopped"}:
+            raise ValueError("New researches must start queued or stopped")
+        queued_at = now if initial_status == "queued" else None
         with self.transaction() as connection:
+            queue_order = (
+                connection.execute(
+                    "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM researches"
+                ).fetchone()[0]
+                if initial_status == "queued"
+                else None
+            )
             connection.execute(
                 """INSERT INTO researches
                    (id, title, original_prompt, objective, status, metric_name, metric_direction,
                     baseline_value, best_value, gpu_source_id, target_gpu_allocation, workspace_path,
-                    adapter_type, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, 'stopped', ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)""",
+                    adapter_type, research_type, model_id, model_digest, model_runtime, benchmark_profile,
+                    queued_at, queue_order, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     research_id,
                     values["title"],
                     values["original_prompt"],
                     values["objective"],
+                    initial_status,
                     values.get("metric_name", "val_bpb"),
                     values.get("metric_direction", "lower_is_better"),
                     values["gpu_source_id"],
                     values["target_gpu_allocation"],
                     values.get("adapter_type", "karpathy_autoresearch"),
+                    values.get("research_type", "training_optimization"),
+                    values.get("model_id"),
+                    values.get("model_digest"),
+                    values.get("model_runtime"),
+                    values.get("benchmark_profile"),
+                    queued_at,
+                    queue_order,
                     now,
                     now,
                 ),
@@ -394,6 +532,47 @@ class Database:
         )
         with self.connect() as connection:
             rows = connection.execute(query, (*params, limit, offset)).fetchall()
+        researches = [self._record(row) or {} for row in rows]
+        if any(item.get("status") == "queued" for item in researches):
+            positions = {
+                item["id"]: item["queue_position"]
+                for item in self.list_queued_researches()
+            }
+            for research in researches:
+                if research.get("status") == "queued":
+                    research["queue_position"] = positions.get(research["id"])
+        return researches
+
+    def list_queued_researches(
+        self, gpu_source_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        where = "WHERE r.status = 'queued'"
+        params: list[Any] = []
+        if gpu_source_id is not None:
+            where += " AND r.gpu_source_id = ?"
+            params.append(gpu_source_id)
+        query = (
+            self._research_select()
+            + f" {where} GROUP BY r.id "
+            "ORDER BY r.queue_order ASC, r.queued_at ASC, r.created_at ASC, r.id ASC"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        queued = [self._record(row) or {} for row in rows]
+        for position, research in enumerate(queued, start=1):
+            research["queue_position"] = position
+        return queued
+
+    def list_gpu_reservations(self) -> list[dict[str, Any]]:
+        """Return every running or paused research without UI pagination limits."""
+
+        query = (
+            self._research_select()
+            + " WHERE r.status IN ('running', 'paused')"
+            + " GROUP BY r.id ORDER BY r.updated_at DESC"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(query).fetchall()
         return [self._record(row) or {} for row in rows]
 
     def get_research(
@@ -403,6 +582,15 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(query, (research_id,)).fetchone()
         record = self._record(row)
+        if record is not None and record.get("status") == "queued":
+            record["queue_position"] = next(
+                (
+                    item["queue_position"]
+                    for item in self.list_queued_researches()
+                    if item["id"] == research_id
+                ),
+                None,
+            )
         if record is not None and detail:
             record["experiments"] = self.list_experiments(research_id)
             record["logs"] = self.list_recent_logs(research_id, limit=200)
@@ -427,6 +615,12 @@ class Database:
         updates = {key: value for key, value in values.items() if key in allowed}
         if not updates:
             return self.get_research(research_id, detail=True)
+        if "status" in updates:
+            updates["queued_at"] = (
+                utc_now() if updates["status"] == "queued" else None
+            )
+            if updates["status"] != "queued":
+                updates["queue_order"] = None
         updates["updated_at"] = utc_now()
         assignments = ", ".join(f"{column} = ?" for column in updates)
         with self.transaction() as connection:
@@ -443,9 +637,25 @@ class Database:
     ) -> bool:
         placeholders = ",".join("?" for _ in from_statuses)
         with self.transaction() as connection:
+            queued_at = utc_now() if to_status == "queued" else None
+            queue_order = (
+                connection.execute(
+                    "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM researches"
+                ).fetchone()[0]
+                if to_status == "queued"
+                else None
+            )
             cursor = connection.execute(
-                f"UPDATE researches SET status = ?, updated_at = ? WHERE id = ? AND status IN ({placeholders})",
-                (to_status, utc_now(), research_id, *from_statuses),
+                f"UPDATE researches SET status = ?, queued_at = ?, queue_order = ?, updated_at = ? "
+                f"WHERE id = ? AND status IN ({placeholders})",
+                (
+                    to_status,
+                    queued_at,
+                    queue_order,
+                    utc_now(),
+                    research_id,
+                    *from_statuses,
+                ),
             )
         return cursor.rowcount == 1
 
@@ -709,7 +919,7 @@ class Database:
             rows = connection.execute(
                 """SELECT a.id, a.research_id, a.title, a.created_at, a.updated_at,
                           r.status AS research_status, r.metric_name, r.best_value,
-                          r.original_prompt
+                          r.original_prompt, r.research_type, r.model_id
                    FROM articles a JOIN researches r ON r.id = a.research_id
                    ORDER BY a.updated_at DESC"""
             ).fetchall()
@@ -737,7 +947,8 @@ class Database:
                     "",
                 )
             row = connection.execute(
-                """SELECT a.*, r.status AS research_status, r.metric_name, r.best_value
+                """SELECT a.*, r.status AS research_status, r.metric_name, r.best_value,
+                          r.research_type, r.model_id
                    FROM articles a JOIN researches r ON r.id = a.research_id WHERE a.id = ?""",
                 (article_id,),
             ).fetchone()

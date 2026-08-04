@@ -26,12 +26,16 @@ export function titleCase(value: string): string {
 
 export function metricLabel(name: string): string {
   if (name === "val_bpb") return "Text prediction loss";
+  if (name === "output_tokens_per_second") return "Generation speed";
   return titleCase(name);
 }
 
 export function metricDescription(name: string): string {
   if (name === "val_bpb") {
     return "How much the model struggles to predict text it has not seen. Lower is better.";
+  }
+  if (name === "output_tokens_per_second") {
+    return "How many answer tokens the model produces each second. Higher is better.";
   }
   return "The score used to compare each completed test.";
 }

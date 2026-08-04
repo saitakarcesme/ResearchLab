@@ -10,7 +10,10 @@ from typing import Any
 from backend.adapters import (
     AdapterContext,
     KarpathyAutoresearchAdapter,
+    OllamaBenchmarkAdapter,
     ResearchAdapter,
+    ResearchComplete,
+    ResearchFailed,
 )
 from backend.config import Settings
 from backend.db import Database, utc_now
@@ -99,12 +102,44 @@ class ResearchSupervisor:
         self.db = database
         self.telemetry = telemetry
         self.adapter_factories = adapter_factories or {
-            "karpathy_autoresearch": KarpathyAutoresearchAdapter
+            "karpathy_autoresearch": KarpathyAutoresearchAdapter,
+            "ollama_benchmark": OllamaBenchmarkAdapter,
         }
         self._runtimes: dict[str, ResearchRuntime] = {}
         self._gpu_locks: dict[str, threading.Lock] = {}
         self._repository_lock = threading.Lock()
         self._lock = threading.RLock()
+        self._dispatch_lock = threading.RLock()
+        self._queue_event = threading.Event()
+        self._shutdown_event = threading.Event()
+        self._queue_thread = threading.Thread(
+            target=self._queue_worker,
+            name="research-queue",
+            daemon=True,
+        )
+        self._queue_thread.start()
+        self._queue_event.set()
+
+    def notify_queue(self) -> None:
+        """Wake the scheduler after a durable queue change or capacity release."""
+
+        self._queue_event.set()
+
+    def _queue_worker(self) -> None:
+        while not self._shutdown_event.is_set():
+            self._queue_event.wait()
+            self._queue_event.clear()
+            if self._shutdown_event.is_set():
+                break
+            if not self.settings.execution_enabled:
+                continue
+            while not self._shutdown_event.is_set():
+                try:
+                    started = self.start_next()
+                except Exception:  # noqa: BLE001 - start() persists the individual failure
+                    break
+                if started is None:
+                    break
 
     @staticmethod
     def terminate_stale_process_groups(
@@ -180,6 +215,29 @@ class ResearchSupervisor:
             return f"local:{device}"
         return f"remote:{source.get('host')}:{device}"
 
+    def _has_gpu_capacity(self, candidate: dict[str, Any]) -> bool:
+        source = self.db.get_gpu_source(candidate["gpu_source_id"])
+        if source is None:
+            return False
+        candidate_key = self._physical_gpu_key(source)
+        allocations = 0
+        # A paused research keeps its place on the GPU, including across a service
+        # restart. Looking only at attached runtimes would let a queued job jump
+        # ahead during the short window before the paused research is resumed.
+        for active in self.db.list_gpu_reservations():
+            active_source = self.db.get_gpu_source(active["gpu_source_id"])
+            if (
+                active_source is None
+                or self._physical_gpu_key(active_source) != candidate_key
+            ):
+                continue
+            if not self.settings.use_cuda_mps:
+                return False
+            allocations += int(active["target_gpu_allocation"])
+        if not self.settings.use_cuda_mps:
+            return True
+        return allocations + int(candidate["target_gpu_allocation"]) <= 100
+
     def _launch(self, research: dict[str, Any]) -> ResearchRuntime:
         source = self.db.get_gpu_source(research["gpu_source_id"])
         if source is None:
@@ -214,7 +272,12 @@ class ResearchSupervisor:
             if research["id"] in self._runtimes:
                 raise RuntimeError("Research already has an active supervisor")
             self._runtimes[research["id"]] = runtime
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            with self._lock:
+                self._runtimes.pop(research["id"], None)
+            raise
         return runtime
 
     def _worker(
@@ -232,6 +295,8 @@ class ResearchSupervisor:
                     break
                 try:
                     adapter.run_iteration()
+                except (ResearchComplete, ResearchFailed):
+                    raise
                 except InterruptedError:
                     break
                 except Exception as exc:  # noqa: BLE001 - an iteration failure must not end autonomous research
@@ -242,6 +307,21 @@ class ResearchSupervisor:
                         level="error",
                     )
                     runtime.stop_event.wait(2)
+        except ResearchComplete as complete:
+            if self.db.transition_research(research_id, ["running"], "completed"):
+                self.db.add_log(
+                    research_id,
+                    "research_completed",
+                    complete.message,
+                )
+        except ResearchFailed as failed:
+            if self.db.transition_research(research_id, ["running"], "failed"):
+                self.db.add_log(
+                    research_id,
+                    "research_failed",
+                    failed.message,
+                    level="error",
+                )
         except InterruptedError:
             pass
         except Exception as exc:  # noqa: BLE001 - adapter startup failures are persisted as failed state
@@ -252,39 +332,105 @@ class ResearchSupervisor:
             runtime.set_phase("detached")
             with self._lock:
                 self._runtimes.pop(research_id, None)
+            self.notify_queue()
 
     def start(self, research_id: str) -> dict[str, Any]:
         if not self.settings.execution_enabled:
             raise PermissionError(
                 "Real execution is disabled. Set AUTORESEARCH_ENABLE_EXECUTION=1 and restart the backend."
             )
-        research = self.db.get_research(research_id, detail=True)
-        if research is None:
-            raise KeyError(research_id)
-        with self._lock:
-            existing = self._runtimes.get(research_id)
-        if existing:
-            if research["status"] == "paused":
-                return self.resume(research_id)
-            raise RuntimeError("Research is already running")
-        if research["status"] not in {"stopped", "paused", "failed"}:
-            raise RuntimeError(f"Research cannot start from {research['status']}")
-        if not self.db.transition_research(
-            research_id, [research["status"]], "running"
-        ):
-            raise RuntimeError("Research state changed concurrently")
-        updated = self.db.get_research(research_id, detail=True) or research
-        self.db.add_log(
-            research_id,
-            "research_started",
-            "Research started on a real execution worker.",
-        )
-        try:
-            self._launch(updated)
-        except Exception:
-            self.db.update_research(research_id, {"status": "failed"})
-            raise
-        return self.db.get_research(research_id, detail=True) or updated
+        with self._dispatch_lock:
+            research = self.db.get_research(research_id, detail=True)
+            if research is None:
+                raise KeyError(research_id)
+            with self._lock:
+                existing = self._runtimes.get(research_id)
+            if existing:
+                if research["status"] == "paused":
+                    return self.resume(research_id)
+                raise RuntimeError("Research is already running")
+            if research["status"] not in {"queued", "stopped", "paused", "failed"}:
+                raise RuntimeError(f"Research cannot start from {research['status']}")
+            previous_status = research["status"]
+            if not self.db.transition_research(
+                research_id, [previous_status], "running"
+            ):
+                raise RuntimeError("Research state changed concurrently")
+            updated = self.db.get_research(research_id, detail=True) or research
+            self.db.add_log(
+                research_id,
+                "research_started",
+                (
+                    "Queued research started after its GPU source became available."
+                    if previous_status == "queued"
+                    else "Research started on a real execution worker."
+                ),
+                data={"from_queue": previous_status == "queued"},
+            )
+            try:
+                self._launch(updated)
+            except Exception as exc:
+                self.db.update_research(research_id, {"status": "failed"})
+                self.db.add_log(
+                    research_id,
+                    "research_start_failed",
+                    f"Research worker could not start: {exc}",
+                    level="error",
+                )
+                self.notify_queue()
+                raise
+            return self.db.get_research(research_id, detail=True) or updated
+
+    def start_next(self, gpu_source_id: str | None = None) -> dict[str, Any] | None:
+        """Start the oldest queued research whose GPU has available capacity."""
+
+        if not self.settings.execution_enabled:
+            raise PermissionError(
+                "Real execution is disabled. Set AUTORESEARCH_ENABLE_EXECUTION=1 and restart the backend."
+            )
+        with self._dispatch_lock:
+            for research in self.db.list_queued_researches(gpu_source_id):
+                if self._has_gpu_capacity(research):
+                    return self.start(research["id"])
+        return None
+
+    def enqueue(self, research_id: str) -> dict[str, Any]:
+        with self._dispatch_lock:
+            research = self.db.get_research(research_id, detail=True)
+            if research is None:
+                raise KeyError(research_id)
+            if research["status"] == "queued":
+                return research
+            if research["status"] not in {"stopped", "failed"}:
+                raise RuntimeError("Only a stopped or failed research can be queued")
+            if not self.db.transition_research(
+                research_id, [research["status"]], "queued"
+            ):
+                raise RuntimeError("Research state changed concurrently")
+            self.db.add_log(
+                research_id,
+                "research_queued",
+                "Research added to the GPU queue.",
+            )
+            result = self.db.get_research(research_id, detail=True) or research
+        self.notify_queue()
+        return result
+
+    def dequeue(self, research_id: str) -> dict[str, Any]:
+        with self._dispatch_lock:
+            research = self.db.get_research(research_id, detail=True)
+            if research is None:
+                raise KeyError(research_id)
+            if research["status"] != "queued":
+                raise RuntimeError("Only a queued research can be removed from the queue")
+            if not self.db.transition_research(research_id, ["queued"], "stopped"):
+                raise RuntimeError("Research state changed concurrently")
+            self.db.add_log(
+                research_id,
+                "research_dequeued",
+                "Research removed from the GPU queue.",
+            )
+            return self.db.get_research(research_id, detail=True) or research
 
     def pause(self, research_id: str) -> dict[str, Any]:
         research = self.db.get_research(research_id)
@@ -339,6 +485,8 @@ class ResearchSupervisor:
         research = self.db.get_research(research_id)
         if research is None:
             raise KeyError(research_id)
+        if research["status"] == "queued":
+            return self.dequeue(research_id)
         if research["status"] not in {"running", "paused"}:
             raise RuntimeError("Only a running or paused research can be stopped")
         with self._lock:
@@ -363,12 +511,15 @@ class ResearchSupervisor:
             )
         if runtime and runtime.thread:
             runtime.thread.join(timeout=10)
+        self.notify_queue()
         result = self.db.get_research(research_id, detail=True) or research
         if runtime and runtime.control_error:
             raise RuntimeError(runtime.control_error)
         return result
 
     def shutdown(self) -> None:
+        self._shutdown_event.set()
+        self._queue_event.set()
         with self._lock:
             runtimes = list(self._runtimes.values())
         for runtime in runtimes:
@@ -394,6 +545,7 @@ class ResearchSupervisor:
         for runtime in runtimes:
             if runtime.thread:
                 runtime.thread.join(timeout=5)
+        self._queue_thread.join(timeout=5)
 
     def runtime_snapshot(self, research_id: str) -> dict[str, Any]:
         with self._lock:

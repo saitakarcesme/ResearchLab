@@ -1,4 +1,5 @@
 export type ResearchStatus =
+  | "queued"
   | "running"
   | "paused"
   | "completed"
@@ -6,6 +7,10 @@ export type ResearchStatus =
   | "failed";
 
 export type MetricDirection = "lower_is_better" | "higher_is_better";
+
+export type ResearchType = "training_optimization" | "local_model_benchmark";
+
+export type BenchmarkProfile = "ollama-text-v1";
 
 export interface Experiment {
   id: string;
@@ -38,6 +43,12 @@ export interface Research {
   status: ResearchStatus;
   metric_name: string;
   metric_direction: MetricDirection;
+  research_type: ResearchType;
+  model_id: string | null;
+  model_digest: string | null;
+  model_runtime: string | null;
+  benchmark_profile: BenchmarkProfile | null;
+  queue_position?: number | null;
   baseline_value: number | null;
   best_value: number | null;
   gpu_source_id: string | null;
@@ -60,6 +71,29 @@ export interface Research {
       is_hard_utilization_target?: boolean;
     };
   };
+}
+
+export interface LocalModel {
+  id: string;
+  provider: "ollama";
+  name: string;
+  digest: string;
+  size_bytes: number;
+  parameter_size: string | null;
+  quantization_level: string | null;
+  family: string | null;
+  capabilities: string[];
+  context_length: number | null;
+  recommended: boolean;
+}
+
+export interface LocalModelCatalog {
+  runtime: {
+    provider: "ollama";
+    endpoint: string;
+    version: string | null;
+  };
+  models: LocalModel[];
 }
 
 export interface GpuProcess {

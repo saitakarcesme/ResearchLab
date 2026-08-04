@@ -45,6 +45,8 @@ def article_kind(research: Mapping[str, Any]) -> ArticleKind:
     explicit = str(research.get("article_kind") or "").strip().lower()
     if explicit in {"technical", "general"}:
         return explicit
+    if research.get("research_type") == "local_model_benchmark":
+        return "technical"
     prompt = re.sub(r"\s+", " ", str(research.get("original_prompt") or "")).strip()
     if not prompt:
         # Older persisted records and unit fixtures may not have the original prompt.
@@ -57,6 +59,8 @@ def article_kind(research: Mapping[str, Any]) -> ArticleKind:
     )
 
 _SETTING_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("context_length", r"\b(?:num_ctx|context length|token context)\b"),
+    ("processing_batch", r"\b(?:num_batch|processing batch)\b"),
     ("window_pattern", r"\bwindow_pattern\b|attention window pattern"),
     (
         "short_attention_window",
@@ -625,7 +629,17 @@ def generate_article_markdown(
     lower_is_better = _is_lower_better(research)
     metric = _one_line(research.get("metric_name")) or "the tracked metric"
     is_prediction_loss = metric.lower() == "val_bpb"
-    metric_label = "prediction loss" if is_prediction_loss else f"`{metric}`"
+    is_output_speed = metric.lower() in {
+        "output_tokens_per_second",
+        "tokens_per_second",
+    }
+    metric_label = (
+        "prediction loss"
+        if is_prediction_loss
+        else "generation speed"
+        if is_output_speed
+        else f"`{metric}`"
+    )
     baseline = _baseline_value(research, ordered_experiments)
     best = _best_value(research, ordered_experiments, lower_is_better=lower_is_better)
     best_item = _best_experiment(research, ordered_experiments, best)
@@ -652,7 +666,11 @@ def generate_article_markdown(
             lower_is_better=lower_is_better,
         )
         direction = "lowered" if lower_is_better else "raised"
-        gain_text = f" by **{absolute_gain:.6f}**"
+        gain_text = (
+            f" by **{absolute_gain:.1f} tokens per second**"
+            if is_output_speed
+            else f" by **{absolute_gain:.6f}**"
+        )
         if relative_gain is not None:
             gain_text += f" (**{relative_gain:.2f}%**)"
         opening.extend(
@@ -672,6 +690,12 @@ def generate_article_markdown(
             opening.append(
                 "The practical takeaway is simple: the model became less uncertain on "
                 "unseen text, and this is the strongest recipe the run actually measured."
+            )
+        elif is_output_speed:
+            opening.append(
+                "In practical terms, the saved profile produced more text each second "
+                "after the model was warm. This measures speed, not whether its answers "
+                "are better."
             )
         else:
             opening.append(
@@ -777,6 +801,16 @@ def generate_article_markdown(
             "per byte**. Think of it as how surprised the model is by text it did not train "
             "on: lower is better. All of the numbers here came from the same saved "
             "evaluation setup, so they can be compared directly."
+        )
+    elif is_output_speed:
+        model_name = _one_line(research.get("model_id")).removeprefix("ollama:")
+        model_text = f" for `{model_name}`" if model_name else ""
+        lines.append(
+            "Here, **generation speed** means the number of output tokens produced each "
+            f"second after warm-up{model_text}. Higher is better. Every profile used the "
+            "same prompt, output length, model digest, and three measured repetitions; "
+            "the chart uses their median. That makes the speed comparison useful, but it "
+            "does not compare answer quality."
         )
     else:
         direction = "lower" if lower_is_better else "higher"
