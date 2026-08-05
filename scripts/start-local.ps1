@@ -31,7 +31,7 @@ try {
         if (-not $tailscale) {
             throw "Tailscale is not installed. Install and sign in, then run again with -EnableTailnetAccess."
         }
-        & $tailscale.Source serve --bg http://127.0.0.1:3000
+        & $tailscale.Source serve --bg http://localhost:3000
         Write-Host "Private Mac access is enabled through Tailscale Serve."
         & $tailscale.Source serve status
     }
