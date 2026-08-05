@@ -6,7 +6,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 type Point = { index: number; value: number };
 
 function placeholderValue(index: number): number {
-  return 35 + Math.sin(index / 2.8) * 8 + Math.sin(index / 7.2) * 5;
+  // Node and Chromium can differ in the last floating-point digits of trig
+  // functions. Rounding keeps the server and client SVG path byte-identical.
+  return Number((35 + Math.sin(index / 2.8) * 8 + Math.sin(index / 7.2) * 5).toFixed(4));
 }
 
 function smoothPath(points: Point[]): string {
