@@ -560,6 +560,15 @@ class ResearchSupervisor:
                     level="error",
                 )
         finally:
+            try:
+                adapter.cleanup()
+            except Exception as exc:  # noqa: BLE001 - cleanup failure must remain visible
+                self.db.add_log(
+                    research_id,
+                    "adapter_cleanup_warning",
+                    f"Research worker detached, but adapter cleanup needs attention: {exc}",
+                    level="warning",
+                )
             runtime.set_phase("detached")
             with self._lock:
                 self._runtimes.pop(research_id, None)
@@ -580,7 +589,14 @@ class ResearchSupervisor:
                 if research["status"] == "paused":
                     return self.resume(research_id)
                 raise RuntimeError("Research is already running")
-            if research["status"] not in {"queued", "stopped", "paused", "failed"}:
+            restartable_completed = (
+                research["status"] == "completed"
+                and research.get("adapter_type") == "ollama_benchmark"
+            )
+            if (
+                research["status"] not in {"queued", "stopped", "paused", "failed"}
+                and not restartable_completed
+            ):
                 raise RuntimeError(f"Research cannot start from {research['status']}")
             previous_status = research["status"]
             if not self.db.transition_research(

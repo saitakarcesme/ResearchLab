@@ -240,7 +240,8 @@ export function ResearchLiveView({
 
   const canPause = research.status === "running";
   const canResume = research.status === "paused";
-  const canStart = research.status === "queued" || research.status === "stopped" || research.status === "failed";
+  const canRestartCompletedOllama = research.status === "completed" && research.adapter_type === "ollama_benchmark";
+  const canStart = research.status === "queued" || research.status === "stopped" || research.status === "failed" || canRestartCompletedOllama;
   const canDequeue = research.status === "queued";
   const canStop = research.status === "running" || research.status === "paused";
   const hasActiveExperiment = research.experiments?.some(

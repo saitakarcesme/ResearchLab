@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hypothesis", "num_ctx", "num_batch", "expected_improvement"],
+  "properties": {
+    "hypothesis": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    },
+    "num_ctx": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 16384,
+      "multipleOf": 256
+    },
+    "num_batch": {
+      "type": "integer",
+      "enum": [128, 256, 512, 1024, 2048]
+    },
+    "expected_improvement": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    }
+  }
+}

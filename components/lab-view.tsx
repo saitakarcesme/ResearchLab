@@ -339,7 +339,7 @@ export function LabView() {
                     onChange={() => chooseResearchType("local_model_benchmark")}
                   />
                   <Gauge size={16} aria-hidden="true" />
-                  <span><strong>Local model benchmark</strong><small>Measure an Ollama or pinned Hugging Face model.</small></span>
+                  <span><strong>Local model optimization</strong><small>Keep testing an Ollama model until you stop it.</small></span>
                 </label>
               </fieldset>
 

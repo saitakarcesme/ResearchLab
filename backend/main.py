@@ -25,6 +25,7 @@ from backend.huggingface_models import (
     beyefendi_v2_catalog_model,
 )
 from backend.local_models import OllamaClient, OllamaConnectionError
+from backend.payments import PaymentConfigurationError, StripeCheckoutService
 from backend.researcher_models import researcher_model_catalog, resolve_researcher_model
 from backend.schemas import (
     CloudAccountCreate,
@@ -35,10 +36,9 @@ from backend.schemas import (
     ResearchCreate,
     ResearchUpdate,
 )
-from backend.payments import PaymentConfigurationError, StripeCheckoutService
+from backend.secret_store import SecretStore
 from backend.supervisor import ResearchSupervisor
 from backend.telemetry import TelemetryService
-from backend.secret_store import SecretStore
 
 
 def _database(request: Request) -> Database:
@@ -494,9 +494,10 @@ def create_app(
                     "original_prompt": payload.original_prompt,
                     "objective": payload.objective
                     or (
-                        f"Measure {installed.name} with the same prompt and output length "
-                        "across four context and batch profiles. Maximize median warm output "
-                        "tokens per second while requiring the model to remain fully on the GPU."
+                        f"Continuously optimize {installed.name} with agent-proposed context "
+                        "and batch hypotheses under a fixed prompt and output length. Keep "
+                        "strictly faster reproducible results, require full-GPU residency, "
+                        "and continue until the user stops the research."
                     ),
                     "metric_name": "output_tokens_per_second",
                     "metric_direction": "higher_is_better",

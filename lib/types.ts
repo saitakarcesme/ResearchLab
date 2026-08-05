@@ -48,6 +48,7 @@ export interface Research {
   metric_name: string;
   metric_direction: MetricDirection;
   research_type: ResearchType;
+  adapter_type: string;
   researcher_model_id: string | null;
   model_id: string | null;
   model_digest: string | null;

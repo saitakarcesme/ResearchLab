@@ -60,3 +60,6 @@ class ResearchAdapter(ABC):
     @abstractmethod
     def run_iteration(self) -> None:
         """Run one measured experiment and persist its outcome."""
+
+    def cleanup(self) -> None:
+        """Release adapter-owned runtime resources after the worker detaches."""

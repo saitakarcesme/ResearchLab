@@ -119,41 +119,62 @@ def _benchmark(database: Database, source_id: str, title: str) -> dict[str, Any]
     )
 
 
-def test_finite_model_benchmarks_complete_and_release_the_queue(settings) -> None:
+def test_model_research_continues_after_calibration_until_stopped(settings) -> None:
     database = Database(settings.database_path)
     database.initialize()
     source = database.ensure_local_gpu_source("Local GPU")
     first = _benchmark(database, source["id"], "First model benchmark")
     second = _benchmark(database, source["id"], "Second model benchmark")
     fake = FakeOllamaClient()
+
+    def planner(research: dict[str, Any]) -> dict[str, Any]:
+        experiment_number = len(research.get("experiments") or []) + 1
+        return {
+            "hypothesis": f"Agent hypothesis {experiment_number}",
+            "num_ctx": 8192 + (experiment_number % 4) * 256,
+            "num_batch": 2048,
+            "expected_improvement": "A larger processing batch may improve throughput.",
+        }
+
     supervisor = ResearchSupervisor(
         settings,
         database,
         TelemetryService(),
         adapter_factories={
             "ollama_benchmark": lambda context: OllamaBenchmarkAdapter(
-                context, client=fake
+                context, client=fake, candidate_planner=planner
             )
         },
     )
     try:
         _wait_for(
-            lambda: database.get_research(first["id"])["status"] == "completed"
-            and database.get_research(second["id"])["status"] == "completed"
+            lambda: (
+                len(database.get_research(first["id"], detail=True)["experiments"])
+                >= 6
+            )
         )
         first_detail = database.get_research(first["id"], detail=True)
-        second_detail = database.get_research(second["id"], detail=True)
-        assert len(first_detail["experiments"]) == 4
-        assert len(second_detail["experiments"]) == 4
+        assert first_detail["status"] == "running"
+        assert database.get_research(second["id"])["status"] == "queued"
+        assert len(first_detail["experiments"]) >= 6
         assert first_detail["best_value"] > first_detail["baseline_value"]
-        assert database.list_queued_researches() == []
-        assert fake.unloads == 2
-        assert fake.residency_checks == 8
+
+        supervisor.stop(first["id"])
+        _wait_for(
+            lambda: (
+                len(database.get_research(second["id"], detail=True)["experiments"])
+                >= 5
+            )
+        )
+        assert database.get_research(first["id"])["status"] == "stopped"
+        assert database.get_research(second["id"])["status"] == "running"
+        supervisor.stop(second["id"])
+        assert fake.unloads >= 2
     finally:
         supervisor.shutdown()
 
 
-def test_exhausted_profile_attempts_fail_instead_of_claiming_completion(
+def test_failed_profiles_do_not_end_the_autonomous_research_loop(
     settings,
 ) -> None:
     class AlwaysFailingClient(FakeOllamaClient):
@@ -165,31 +186,79 @@ def test_exhausted_profile_attempts_fail_instead_of_claiming_completion(
     source = database.ensure_local_gpu_source("Local GPU")
     research = _benchmark(database, source["id"], "Failing model benchmark")
     fake = AlwaysFailingClient()
+
+    def planner(research: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "hypothesis": "Try another safe context and batch combination.",
+            "num_ctx": 8192,
+            "num_batch": 2048,
+            "expected_improvement": "The research loop should continue after failures.",
+        }
+
     supervisor = ResearchSupervisor(
         settings,
         database,
         TelemetryService(),
         adapter_factories={
             "ollama_benchmark": lambda context: OllamaBenchmarkAdapter(
-                context, client=fake
+                context, client=fake, candidate_planner=planner
             )
         },
     )
     try:
-        _wait_for(lambda: database.get_research(research["id"])["status"] == "failed")
         _wait_for(
-            lambda: any(
-                log["event_type"] == "research_failed"
-                for log in database.get_research(research["id"], detail=True)["logs"]
+            lambda: (
+                len(database.get_research(research["id"], detail=True)["experiments"])
+                >= 10
             )
         )
         detail = database.get_research(research["id"], detail=True)
-        assert len(detail["experiments"]) == 2
+        assert detail["status"] == "running"
         assert all(item["metric_value"] is None for item in detail["experiments"])
-        assert fake.unloads == 1
-        assert any(
-            log["event_type"] == "research_failed" for log in detail["logs"]
+        assert not any(
+            log["event_type"] in {"research_failed", "research_completed"}
+            for log in detail["logs"]
         )
+        supervisor.stop(research["id"])
+        assert database.get_research(research["id"])["status"] == "stopped"
+    finally:
+        supervisor.shutdown()
+
+
+def test_completed_ollama_research_can_reenter_the_continuous_loop(settings) -> None:
+    database = Database(settings.database_path)
+    database.initialize()
+    source = database.ensure_local_gpu_source("Local GPU")
+    research = _benchmark(database, source["id"], "Legacy completed benchmark")
+    database.update_research(research["id"], {"status": "completed"})
+    fake = FakeOllamaClient()
+    supervisor = ResearchSupervisor(
+        settings,
+        database,
+        TelemetryService(),
+        adapter_factories={
+            "ollama_benchmark": lambda context: OllamaBenchmarkAdapter(
+                context,
+                client=fake,
+                candidate_planner=lambda _research: {
+                    "hypothesis": "Continue beyond the legacy finite benchmark.",
+                    "num_ctx": 8192,
+                    "num_batch": 2048,
+                    "expected_improvement": "The old completed state must be restartable.",
+                },
+            )
+        },
+    )
+    try:
+        supervisor.start(research["id"])
+        _wait_for(
+            lambda: (
+                len(database.get_research(research["id"], detail=True)["experiments"])
+                >= 5
+            )
+        )
+        assert database.get_research(research["id"])["status"] == "running"
+        supervisor.stop(research["id"])
     finally:
         supervisor.shutdown()
 
@@ -232,7 +301,7 @@ def test_stopped_benchmark_unloads_the_selected_model(settings) -> None:
     with pytest.raises(InterruptedError):
         adapter.run_iteration()
 
-    assert fake.unloads == 1
+    assert fake.unloads == 0
 
 
 def test_model_catalog_and_create_api_pin_the_selected_digest(
