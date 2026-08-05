@@ -293,7 +293,16 @@ a {
   padding: 94px 32px 72px;
 }
 
-.app-main:fullscreen {
+.app-main.app-main-fullscreen {
+  position: fixed;
+  z-index: 200;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  inset: 0;
+}
+
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) {
   overflow: auto;
   background:
     radial-gradient(circle at 72% -12%, rgba(83, 83, 83, 0.16), transparent 34%),
@@ -464,12 +473,25 @@ a {
   overflow: auto;
   border: 1px solid rgba(174, 174, 174, 0.16);
   border-radius: 17px;
-  background: rgba(8, 8, 8, 0.52);
+  background: rgba(7, 7, 7, 0.58);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48), 0 0 35px rgba(116, 116, 116, 0.1), inset 0 1px rgba(255, 255, 255, 0.045);
   scrollbar-color: rgba(154, 154, 154, 0.26) transparent;
-  -webkit-backdrop-filter: blur(34px) saturate(115%);
-  backdrop-filter: blur(34px) saturate(115%);
+  -webkit-backdrop-filter: blur(48px) saturate(82%);
+  backdrop-filter: blur(48px) saturate(82%);
   isolation: isolate;
+  transform: translateZ(0);
+}
+
+.researcher-model-menu::before {
+  position: absolute;
+  z-index: -1;
+  border-radius: inherit;
+  background: rgba(5, 5, 5, 0.42);
+  -webkit-backdrop-filter: blur(48px) saturate(82%);
+  backdrop-filter: blur(48px) saturate(82%);
+  content: "";
+  inset: 0;
+  pointer-events: none;
 }
 
 .researcher-model-menu-heading {
@@ -1005,257 +1027,6 @@ a {
   white-space: nowrap;
 }
 
-.lab-gpu-section {
-  position: relative;
-  z-index: 3;
-  width: min(720px, 100%);
-  margin: 16px auto 112px;
-  border-top: 1px solid rgba(255, 255, 255, 0.075);
-}
-
-.lab-gpu-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 46px;
-  padding: 0 8px;
-}
-
-.lab-gpu-heading > div,
-.lab-gpu-device-copy,
-.lab-gpu-offer-copy,
-.lab-gpu-offer-price,
-.lab-gpu-connect > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.lab-gpu-heading > div { gap: 3px; }
-.lab-gpu-heading > div > span {
-  color: var(--text-soft);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-}
-
-.lab-gpu-heading small,
-.lab-gpu-device-copy span,
-.lab-gpu-offer-copy small,
-.lab-gpu-offer-price small,
-.lab-gpu-connect span {
-  color: var(--faint);
-  font-size: 9px;
-}
-
-.lab-rent-trigger {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 11px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 999px;
-  background: rgba(9, 9, 9, 0.36);
-  color: var(--text-soft);
-  font-size: 10px;
-  font-weight: 650;
-  backdrop-filter: blur(16px);
-}
-
-.lab-rent-trigger svg { transition: transform 180ms ease; }
-.rotate-180 { transform: rotate(180deg); }
-
-.lab-gpu-inventory {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-}
-
-.lab-gpu-device {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) auto auto auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 60px;
-  overflow: hidden;
-  padding: 6px 9px 6px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
-  border-radius: 14px;
-  background: rgba(11, 11, 11, 0.28);
-  backdrop-filter: blur(16px);
-}
-
-.lab-gpu-photo,
-.lab-gpu-offer-photo {
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
-  filter: grayscale(1) contrast(1.05) brightness(0.83);
-}
-
-.gpu-photo-3090 {
-  background-image:
-    linear-gradient(rgba(8, 8, 8, 0.04), rgba(8, 8, 8, 0.04)),
-    url("https://www.oficinadanet.com.br/imagens/obj_item/752/3090-pronta.png");
-}
-
-.gpu-photo-datacenter {
-  background-image:
-    linear-gradient(rgba(8, 8, 8, 0.06), rgba(8, 8, 8, 0.06)),
-    url("https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/h100-og.jpg");
-}
-
-.lab-gpu-photo {
-  width: 54px;
-  height: 43px;
-  border-radius: 9px;
-  background-color: rgba(255, 255, 255, 0.025);
-}
-
-.lab-gpu-device-copy { gap: 4px; }
-.lab-gpu-device-copy strong,
-.lab-gpu-offer-copy strong,
-.lab-gpu-connect strong {
-  overflow: hidden;
-  color: var(--text-soft);
-  font-size: 11px;
-  font-weight: 590;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gpu-device-state {
-  color: var(--faint);
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.gpu-device-icon {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--faint);
-}
-
-.gpu-device-icon:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-soft); }
-
-.lab-gpu-market {
-  overflow: hidden;
-  margin-top: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  background: rgba(8, 8, 8, 0.52);
-  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
-  backdrop-filter: blur(24px) saturate(95%);
-}
-
-.lab-gpu-connect {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
-  gap: 13px;
-  align-items: center;
-  min-height: 84px;
-  padding: 10px 12px;
-}
-
-.lab-gpu-connect .lab-gpu-photo { width: 72px; height: 58px; }
-.lab-gpu-connect > div { gap: 5px; }
-.lab-gpu-connect span { max-width: 400px; line-height: 1.45; }
-.lab-gpu-connect a {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  color: var(--text-soft);
-  font-size: 10px;
-}
-
-.lab-gpu-market-loading {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: center;
-  min-height: 86px;
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.lab-gpu-offers {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  max-height: 286px;
-  padding: 6px;
-  overflow: auto;
-}
-
-.lab-gpu-offer {
-  display: grid;
-  grid-template-columns: 62px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 72px;
-  padding: 7px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-}
-
-.lab-gpu-offer:hover { background: rgba(255, 255, 255, 0.025); }
-.lab-gpu-offer-selected {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.lab-gpu-offer-photo {
-  width: 62px;
-  height: 50px;
-  border-radius: 8px;
-  background-color: rgba(255, 255, 255, 0.02);
-}
-
-.lab-gpu-offer-copy { gap: 4px; }
-.lab-gpu-offer-price { align-items: flex-end; gap: 2px; }
-.lab-gpu-offer-price strong {
-  color: var(--text);
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 13px;
-  font-weight: 520;
-}
-
-.lab-gpu-rent-bar {
-  display: flex;
-  gap: 12px;
-  align-items: end;
-  min-height: 62px;
-  padding: 10px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.065);
-}
-
-.lab-gpu-rent-bar label { display: flex; flex-direction: column; gap: 5px; }
-.lab-gpu-rent-bar label span { color: var(--faint); font-size: 8px; text-transform: uppercase; }
-.lab-gpu-rent-bar input {
-  width: 72px;
-  height: 34px;
-  padding: 0 9px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 9px;
-  outline: 0;
-  background: rgba(0, 0, 0, 0.28);
-  color: var(--text-soft);
-}
-
-.lab-gpu-estimate { flex: 1; color: var(--faint); font-size: 10px; }
-.lab-gpu-error { margin: 8px 8px 0; }
 
 .lab-total-token-usage {
   position: fixed;
@@ -1579,6 +1350,12 @@ a {
   margin: -3px 4px 20px;
 }
 
+.research-runtime-duration {
+  min-width: 112px;
+  align-items: flex-end;
+  text-align: right;
+}
+
 .research-runtime-strip > div,
 .research-elapsed-value,
 .research-runtime-tokens {
@@ -1632,79 +1409,6 @@ a {
 .research-runtime-processed small {
   max-width: 170px;
 }
-
-.cloud-rental {
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-  padding-top: 18px;
-  margin-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-}
-
-.settings-section-heading,
-.cloud-account-links > div,
-.cloud-instance {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.settings-section-heading {
-  justify-content: space-between;
-}
-
-.settings-section-heading div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.settings-section-heading strong,
-.cloud-instance strong { font-size: 12px; }
-.settings-section-heading span,
-.cloud-instance span { color: var(--faint); font-size: 9px; }
-
-.cloud-rent-controls {
-  display: grid;
-  grid-template-columns: minmax(130px, .8fr) minmax(220px, 1.5fr) 110px auto;
-  gap: 9px;
-  align-items: end;
-}
-
-.cloud-rent-controls label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.cloud-rent-controls label > span { color: var(--faint); font-size: 9px; }
-.cloud-rent-controls input,
-.cloud-rent-controls select {
-  min-width: 0;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid rgba(255,255,255,.08);
-  border-radius: 10px;
-  outline: 0;
-  background: rgba(8,8,8,.42);
-  color: var(--text-soft);
-}
-
-.cloud-account-links { display: flex; flex-wrap: wrap; gap: 7px; }
-.cloud-account-links > div { padding: 6px 9px; border: 1px solid rgba(255,255,255,.07); border-radius: 999px; font-size: 9px; }
-.cloud-account-links a { display: inline-flex; gap: 4px; align-items: center; color: var(--text-soft); }
-.cloud-account-links button,
-.cloud-instance button { padding: 3px; border: 0; background: transparent; color: var(--muted); }
-
-.cloud-instance {
-  min-height: 48px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255,255,255,.065);
-  border-radius: 12px;
-}
-.cloud-instance > div { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
-.cloud-instance code { color: var(--faint); font-size: 9px; }
 
 .research-grid {
   display: grid;
@@ -3468,73 +3172,68 @@ a {
   display: none;
 }
 
-.app-main:fullscreen {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) {
   padding: 22px 26px 20px;
 }
 
-.app-main:fullscreen .detail-page,
-.app-main:fullscreen .lab-page,
-.app-main:fullscreen .lab-fullscreen-monitor,
-.app-main:fullscreen .research-live,
-.app-main:fullscreen .research-live-content {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .detail-page,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .lab-page,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .lab-fullscreen-monitor,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content {
   width: 100%;
   height: 100%;
   min-height: 0;
 }
 
-.app-main:fullscreen .detail-page {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .detail-page {
   padding-top: 0;
 }
 
-.app-main:fullscreen .lab-page > .lab-composer-section,
-.app-main:fullscreen .lab-page > .active-research-section {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .lab-page > .lab-composer-section,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .lab-page > .active-research-section {
   display: none;
 }
 
-.app-main:fullscreen .lab-fullscreen-monitor {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .lab-fullscreen-monitor {
   display: block;
 }
 
-.app-main:fullscreen .research-live {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live {
   margin: 0;
 }
 
-.app-main:fullscreen .research-live-content {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
 }
 
-.app-main:fullscreen .research-live-content > .research-header,
-.app-main:fullscreen .research-live-content > .research-error,
-.app-main:fullscreen .research-live-content > .article-ready,
-.app-main:fullscreen .research-live-content > .research-runtime-strip,
-.app-main:fullscreen .research-live-content > .logs-card {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content > .research-header,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content > .research-error,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content > .article-ready,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content > .research-runtime-strip,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-live-content > .logs-card {
   display: none;
 }
 
-.app-main:fullscreen .research-tv-stats {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-tv-stats {
   display: grid;
-  grid-template-columns: 1fr auto auto 1fr;
+  grid-template-columns: 1fr auto auto minmax(150px, 1fr);
   align-items: end;
   min-height: 74px;
   padding: 0 48px 3px 14px;
 }
 
-.app-main:fullscreen .research-tv-processed {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-tv-processed {
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 0 28px;
 }
 
-.app-main:fullscreen .research-tv-processed strong { font-size: clamp(28px, 3vw, 44px); font-weight: 430; }
-.app-main:fullscreen .research-tv-processed span { color: var(--faint); font-size: 8px; letter-spacing: .09em; text-transform: uppercase; }
-
-@media (max-width: 760px) {
-  .cloud-rent-controls { grid-template-columns: 1fr; }
-  .cloud-instance code { display: none; }
-}
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-tv-processed strong { font-size: clamp(28px, 3vw, 44px); font-weight: 430; }
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-tv-processed span { color: var(--faint); font-size: 8px; letter-spacing: .09em; text-transform: uppercase; }
 
 .research-tv-status {
   align-self: center;
@@ -3602,13 +3301,13 @@ a {
   letter-spacing: -0.045em;
 }
 
-.app-main:fullscreen .research-grid {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-grid {
   grid-template-columns: minmax(0, 1.75fr) minmax(330px, 0.75fr);
   gap: 18px;
   min-height: 0;
 }
 
-.app-main:fullscreen .research-grid .surface-card {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-grid .surface-card {
   min-height: 0;
   padding: 8px 18px 12px;
   border: 0;
@@ -3618,78 +3317,78 @@ a {
   backdrop-filter: none;
 }
 
-.app-main:fullscreen .research-grid .surface-card::after,
-.app-main:fullscreen .progress-card .card-heading,
-.app-main:fullscreen .progress-card .accepted-steps,
-.app-main:fullscreen .progress-card .experiment-counts,
-.app-main:fullscreen .gpu-card .gpu-heading,
-.app-main:fullscreen .gpu-card .allocation-note,
-.app-main:fullscreen .gpu-card .gpu-hero-metric > span {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .research-grid .surface-card::after,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .progress-card .card-heading,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .progress-card .accepted-steps,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .progress-card .experiment-counts,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-card .gpu-heading,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-card .allocation-note,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-card .gpu-hero-metric > span {
   display: none;
 }
 
-.app-main:fullscreen .progress-card,
-.app-main:fullscreen .gpu-card {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .progress-card,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-card {
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 
-.app-main:fullscreen .progress-chart-wrap,
-.app-main:fullscreen .chart-empty {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .progress-chart-wrap,
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .chart-empty {
   height: min(70vh, 720px);
   margin-top: 0;
 }
 
-.app-main:fullscreen .chart-empty > span {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .chart-empty > span {
   display: none;
 }
 
-.app-main:fullscreen .empty-trace {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .empty-trace {
   height: 2px;
   background: linear-gradient(90deg, transparent, rgba(145, 145, 145, 0.42), transparent);
   box-shadow: 0 0 22px rgba(145, 145, 145, 0.18);
 }
 
-.app-main:fullscreen .gpu-card {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-card {
   align-items: stretch;
   padding-right: 52px;
 }
 
-.app-main:fullscreen .gpu-hero-metric {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-hero-metric {
   margin-top: 0;
 }
 
-.app-main:fullscreen .gpu-hero-metric strong {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-hero-metric strong {
   font-size: clamp(86px, 10vw, 156px);
   font-weight: 380;
   text-align: center;
 }
 
-.app-main:fullscreen .gpu-sparkline {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-sparkline {
   height: min(22vh, 210px);
   margin: 32px 0 20px;
 }
 
-.app-main:fullscreen .gpu-stats {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-stats {
   gap: 18px;
 }
 
-.app-main:fullscreen .gpu-stats > div {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-stats > div {
   padding: 8px 0;
   background: transparent;
   text-align: center;
 }
 
-.app-main:fullscreen .gpu-stats span {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-stats span {
   font-size: 7px;
 }
 
-.app-main:fullscreen .gpu-stats strong {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .gpu-stats strong {
   font-size: 11px;
 }
 
-.app-main:fullscreen .memory-track {
+:is(.app-main:fullscreen, .app-main.app-main-fullscreen) .memory-track {
   height: 2px;
   margin-top: 22px;
   background: rgba(255, 255, 255, 0.04);
@@ -3857,14 +3556,6 @@ a {
     font-size: clamp(34px, 11vw, 54px);
   }
 
-  .lab-gpu-section { margin-bottom: 102px; }
-  .lab-gpu-inventory,
-  .lab-gpu-offers { grid-template-columns: 1fr; }
-  .lab-gpu-connect { grid-template-columns: 58px minmax(0, 1fr); }
-  .lab-gpu-connect .lab-gpu-photo { width: 58px; height: 48px; }
-  .lab-gpu-connect a { grid-column: 2; }
-  .lab-gpu-rent-bar { align-items: center; flex-wrap: wrap; }
-  .lab-gpu-rent-bar .primary-button { margin-left: auto; }
 
   .topic-composer-section {
     min-height: calc(100vh - 184px);

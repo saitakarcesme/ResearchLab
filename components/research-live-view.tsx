@@ -270,6 +270,10 @@ export function ResearchLiveView({
           <span>Research agent token usage</span>
           <small>{tokenBreakdown(research)}</small>
         </div>
+        <div className="research-tv-processed">
+          <AnimatedTokenCount value={research.training_tokens ?? 0} />
+          <span>Processed tokens</span>
+        </div>
         <div className="research-tv-runtime">
           <ElapsedResearchTime
             createdAt={research.created_at}
@@ -278,11 +282,7 @@ export function ResearchLiveView({
             className="research-tv-elapsed"
             showStartedAt={false}
           />
-          <span>Run time</span>
-        </div>
-        <div className="research-tv-processed">
-          <AnimatedTokenCount value={research.training_tokens ?? 0} />
-          <span>Processed tokens</span>
+          <span>Total duration</span>
         </div>
       </div>
       <header className="research-header">
@@ -362,15 +362,6 @@ export function ResearchLiveView({
       </AnimatePresence>
 
       <div className="research-runtime-strip" aria-label="Research totals">
-        <div className="research-runtime-duration">
-          <span>Total duration</span>
-          <ElapsedResearchTime
-            createdAt={research.created_at}
-            updatedAt={research.updated_at}
-            status={research.status}
-            className="research-elapsed-value"
-          />
-        </div>
         <div className="research-runtime-tokens">
           <span>Research agent token usage</span>
           <AnimatedTokenCount value={research.total_tokens ?? 0} />
@@ -380,6 +371,15 @@ export function ResearchLiveView({
           <span>Processed tokens</span>
           <AnimatedTokenCount value={research.training_tokens ?? 0} />
           <small>Measured by completed GPU experiments</small>
+        </div>
+        <div className="research-runtime-duration">
+          <span>Total duration</span>
+          <ElapsedResearchTime
+            createdAt={research.created_at}
+            updatedAt={research.updated_at}
+            status={research.status}
+            className="research-elapsed-value"
+          />
         </div>
       </div>
 

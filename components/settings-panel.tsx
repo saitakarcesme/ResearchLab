@@ -4,7 +4,6 @@ import { Check, LoaderCircle, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { createGpuSource, listGpuSources } from "@/lib/api";
 import type { GpuSource } from "@/lib/types";
-import { CloudGpuRental } from "./cloud-gpu-rental";
 
 const emptyForm = {
   name: "",
@@ -150,7 +149,6 @@ export function SettingsPanel() {
           <Plus size={16} /> Add GPU source
         </button>
       )}
-      <CloudGpuRental />
     </div>
   );
 }

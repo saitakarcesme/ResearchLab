@@ -75,7 +75,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
   }, []);
 
+  useEffect(() => {
+    if (!fullscreen || document.fullscreenElement) return;
+    const previousOverflow = document.body.style.overflow;
+    const exitFallbackFullscreen = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(false);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", exitFallbackFullscreen);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", exitFallbackFullscreen);
+    };
+  }, [fullscreen]);
+
   const toggleFullscreen = useCallback(async () => {
+    if (fullscreen && !document.fullscreenElement) {
+      setFullscreen(false);
+      return;
+    }
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
@@ -83,9 +101,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }
       await mainRef.current?.requestFullscreen();
     } catch {
-      setFullscreen(false);
+      setFullscreen(true);
     }
-  }, []);
+  }, [fullscreen]);
 
   return (
     <MotionConfig reducedMotion="user">

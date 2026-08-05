@@ -39,23 +39,6 @@ class GpuSourceUpdate(StrictModel):
     workspace_path: str | None = Field(default=None, max_length=1000)
 
 
-class CloudAccountCreate(StrictModel):
-    provider: Literal["shadeform", "runpod"]
-    name: str = Field(min_length=1, max_length=100)
-    api_key: str = Field(min_length=8, max_length=1000)
-    budget_usd: float = Field(gt=0, le=100000)
-    ssh_key_id: str | None = Field(default=None, max_length=300)
-    workspace_path: str = Field(default="/workspace/researchlab", min_length=1, max_length=1000)
-    image_name: str | None = Field(default=None, max_length=500)
-
-
-class CloudRentCreate(StrictModel):
-    account_id: str = Field(min_length=1, max_length=100)
-    offer_id: str = Field(min_length=1, max_length=500)
-    name: str = Field(min_length=1, max_length=100)
-    max_hours: float = Field(gt=0, le=720)
-
-
 class ResearchCreate(StrictModel):
     original_prompt: str = Field(min_length=3, max_length=4000)
     gpu_source_id: str | None = None

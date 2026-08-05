@@ -75,7 +75,7 @@ export function GpuPerformance({
       </div>
 
       <div className="gpu-stats">
-        <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "â€”" : `${Math.round(telemetry.temperature)}Â°C`}</strong></div>
+        <div><span>Temperature</span><strong>{telemetry?.temperature == null ? "—" : `${Math.round(telemetry.temperature)}°C`}</strong></div>
         <div><span>VRAM</span><strong>{formatMemory(used)} / {formatMemory(total)}</strong></div>
         <div><span>Scheduler share</span><strong>{target}%</strong></div>
       </div>

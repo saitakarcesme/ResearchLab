@@ -13,8 +13,6 @@ from fastapi.responses import StreamingResponse
 from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
 from backend.config import Settings
-from backend.cloud_gpu import CloudGpuManager
-from backend.cloud_providers import CloudProviderError
 from backend.db import Database
 from backend.huggingface_models import (
     BEYEFENDI_V2_BASE_MODEL,
@@ -29,14 +27,11 @@ from backend.researcher_models import researcher_model_catalog, resolve_research
 from backend.schemas import (
     GpuSourceCreate,
     GpuSourceUpdate,
-    CloudAccountCreate,
-    CloudRentCreate,
     ResearchCreate,
     ResearchUpdate,
 )
 from backend.supervisor import ResearchSupervisor
 from backend.telemetry import TelemetryService
-from backend.secret_store import SecretStore
 
 
 def _database(request: Request) -> Database:
@@ -53,10 +48,6 @@ def _telemetry(request: Request) -> TelemetryService:
 
 def _ollama(request: Request) -> OllamaClient:
     return request.app.state.ollama
-
-
-def _cloud(request: Request) -> CloudGpuManager:
-    return request.app.state.cloud_gpu
 
 
 def _local_researcher_models(
@@ -127,29 +118,20 @@ def create_app(
         )
         database.recover_interrupted_researches()
         supervisor = ResearchSupervisor(configured, database, telemetry)
-        cloud_gpu = CloudGpuManager(database, SecretStore(configured.data_dir / "secrets"))
         app.state.settings = configured
         app.state.database = database
         app.state.telemetry = telemetry
         app.state.ollama = OllamaClient()
         app.state.supervisor = supervisor
-        app.state.cloud_gpu = cloud_gpu
         app.state.brief_generator = brief_generator or CodexResearchBriefGenerator(
             configured
         )
         app.state.article_generator = article_generator or ResearchArticleGenerator(
             configured, usage_recorder=database.record_codex_token_usage
         )
-        async def cloud_sync_loop() -> None:
-            while True:
-                await asyncio.sleep(15)
-                await asyncio.to_thread(cloud_gpu.sync_all)
-
-        cloud_task = asyncio.create_task(cloud_sync_loop())
         try:
             yield
         finally:
-            cloud_task.cancel()
             supervisor.shutdown()
 
     app = FastAPI(
@@ -178,75 +160,6 @@ def create_app(
     @app.get("/api/gpu-sources")
     def list_gpu_sources(request: Request) -> list[dict[str, Any]]:
         return _database(request).list_gpu_sources()
-
-    @app.get("/api/cloud/accounts")
-    def list_cloud_accounts(request: Request) -> list[dict[str, Any]]:
-        return [_cloud(request).public_account(value) for value in _database(request).list_cloud_accounts()]
-
-    @app.post("/api/cloud/accounts", status_code=status.HTTP_201_CREATED)
-    def create_cloud_account(payload: CloudAccountCreate, request: Request) -> dict[str, Any]:
-        secret_ref = _cloud(request).secrets.put(payload.api_key)
-        try:
-            account = _database(request).create_cloud_account(
-                {"provider": payload.provider, "name": payload.name, "budget_usd": payload.budget_usd,
-                 "settings": {"ssh_key_id": payload.ssh_key_id, "workspace_path": payload.workspace_path, "image_name": payload.image_name}},
-                secret_ref,
-            )
-        except Exception:
-            _cloud(request).secrets.delete(secret_ref)
-            raise
-        return _cloud(request).public_account(account)
-
-    @app.delete("/api/cloud/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-    def delete_cloud_account(account_id: str, request: Request) -> Response:
-        try:
-            account = _database(request).delete_cloud_account(account_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if not account:
-            raise _not_found("Cloud account")
-        _cloud(request).secrets.delete(account["secret_ref"])
-        return Response(status_code=204)
-
-    @app.get("/api/cloud/accounts/{account_id}/offers")
-    def list_cloud_offers(account_id: str, request: Request) -> list[dict[str, Any]]:
-        try:
-            return _cloud(request).offers(account_id)
-        except KeyError as exc:
-            raise _not_found("Cloud account") from exc
-        except CloudProviderError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @app.get("/api/cloud/instances")
-    def list_cloud_instances(request: Request) -> list[dict[str, Any]]:
-        return _database(request).list_cloud_instances()
-
-    @app.post("/api/cloud/instances", status_code=status.HTTP_201_CREATED)
-    def rent_cloud_instance(payload: CloudRentCreate, request: Request) -> dict[str, Any]:
-        try:
-            return _cloud(request).rent(payload.account_id, payload.offer_id, name=payload.name, max_hours=payload.max_hours)
-        except KeyError as exc:
-            raise _not_found("Cloud account") from exc
-        except (ValueError, CloudProviderError) as exc:
-            raise HTTPException(status_code=409 if isinstance(exc, ValueError) else 502, detail=str(exc)) from exc
-
-    @app.post("/api/cloud/instances/{instance_id}/refresh")
-    def refresh_cloud_instance(instance_id: str, request: Request) -> dict[str, Any]:
-        try:
-            return _cloud(request).sync(instance_id)
-        except KeyError as exc:
-            raise _not_found("Cloud instance") from exc
-        except CloudProviderError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @app.post("/api/cloud/instances/{instance_id}/terminate")
-    def terminate_cloud_instance(instance_id: str, request: Request) -> dict[str, Any]:
-        try:
-            return _cloud(request).terminate(instance_id)
-        except KeyError as exc:
-            raise _not_found("Cloud instance") from exc
-        except CloudProviderError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/api/gpu-sources", status_code=status.HTTP_201_CREATED)
     def create_gpu_source(payload: GpuSourceCreate, request: Request) -> dict[str, Any]:
