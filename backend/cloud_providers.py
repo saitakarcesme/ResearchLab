@@ -40,9 +40,11 @@ class CloudOffer:
     hourly_price_usd: float
     available: bool
     raw: dict[str, Any]
+    gpu_count: int = 1
+    reliability: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "name": self.name, "gpu": self.gpu, "vram_gb": self.vram_gb, "region": self.region, "hourly_price_usd": self.hourly_price_usd, "available": self.available}
+        return {"id": self.id, "name": self.name, "gpu": self.gpu, "vram_gb": self.vram_gb, "region": self.region, "hourly_price_usd": self.hourly_price_usd, "available": self.available, "gpu_count": self.gpu_count, "reliability": self.reliability}
 
 
 class ShadeformProvider:
@@ -149,11 +151,110 @@ class RunPodProvider:
         return {"external_id": str(item.get("id")), "status": str(item.get("desiredStatus") or item.get("status") or "creating").lower(), "host": item.get("publicIp") or item.get("public_ip"), "port": int(ssh_port), "username": "root"}
 
 
+class VastProvider:
+    id = "vast"
+    base_url = "https://console.vast.ai/api/v0"
+    billing_url = "https://cloud.vast.ai/billing/"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    def offers(self) -> list[dict[str, Any]]:
+        query = {
+            "verified": {"eq": True}, "rentable": {"eq": True}, "rented": {"eq": False},
+            "num_gpus": {"eq": 1}, "gpu_ram": {"gte": 20 * 1024}, "compute_cap": {"gte": 750},
+            "limit": 60, "order": [["dph_total", "asc"]],
+        }
+        if self.api_key:
+            payload = _request(f"{self.base_url}/bundles/", self.api_key, method="POST", headers=self.headers, body={"type": "ondemand", **query})
+        else:
+            encoded = urllib.parse.quote(json.dumps(query, separators=(",", ":")))
+            payload = _request(f"{self.base_url}/bundles/?q={encoded}", "")
+        rows = payload.get("offers", payload if isinstance(payload, list) else [])
+        if isinstance(rows, Mapping):
+            rows = [rows]
+        offers: list[CloudOffer] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            offer_id = item.get("id") or item.get("ask_contract_id")
+            price = item.get("dph_total") or item.get("dph_base")
+            if offer_id is None or price is None:
+                continue
+            gpu = str(item.get("gpu_name") or "NVIDIA GPU").replace("_", " ")
+            ram_mb = _number(item.get("gpu_ram"))
+            location = str(item.get("geolocation") or item.get("country") or "Remote")
+            reliability = _number(item.get("reliability2") or item.get("reliability"))
+            offers.append(
+                CloudOffer(
+                    id=str(offer_id),
+                    name=f"{gpu} · {location}",
+                    gpu=gpu,
+                    vram_gb=round(ram_mb / 1024, 1) if ram_mb and ram_mb > 256 else ram_mb,
+                    region=location,
+                    hourly_price_usd=float(price),
+                    available=True,
+                    raw=item,
+                    gpu_count=int(item.get("num_gpus") or 1),
+                    reliability=reliability,
+                )
+            )
+        return [offer.as_dict() for offer in sorted(offers, key=lambda value: value.hourly_price_usd)]
+
+    @classmethod
+    def public_offers(cls) -> list[dict[str, Any]]:
+        return cls("").offers()
+
+    def credit_balance(self) -> float | None:
+        payload = _request(f"{self.base_url}/users/current/", self.api_key, headers=self.headers)
+        return _number(payload.get("credit", payload.get("balance")))
+
+    def create(self, offer_id: str, *, name: str, image_name: str, max_spend_usd: float) -> dict[str, Any]:
+        payload = _request(
+            f"{self.base_url}/asks/{urllib.parse.quote(offer_id)}/",
+            self.api_key,
+            method="PUT",
+            headers=self.headers,
+            body={
+                "image": image_name,
+                "label": name,
+                "disk": 50,
+                "runtype": "ssh_direct",
+                "target_state": "running",
+                "cancel_unavail": True,
+            },
+        )
+        external_id = payload.get("new_contract") or payload.get("id")
+        if not external_id:
+            raise CloudProviderError("Vast accepted no instance contract for this offer")
+        return {"external_id": str(external_id), "status": "creating", "host": None, "port": 22, "username": "root"}
+
+    def get(self, instance_id: str) -> dict[str, Any]:
+        payload = _request(f"{self.base_url}/instances/{urllib.parse.quote(instance_id)}/", self.api_key, headers=self.headers)
+        item = payload.get("instance", payload)
+        return {
+            "external_id": str(item.get("id") or instance_id),
+            "status": str(item.get("actual_status") or item.get("status") or "creating").lower(),
+            "host": item.get("ssh_host") or item.get("public_ipaddr") or item.get("public_ip"),
+            "port": int(item.get("ssh_port") or 22),
+            "username": "root",
+        }
+
+    def terminate(self, instance_id: str) -> None:
+        _request(f"{self.base_url}/instances/{urllib.parse.quote(instance_id)}/", self.api_key, method="DELETE", headers=self.headers)
+
+
 def provider_client(provider: str, api_key: str):
     if provider == "shadeform":
         return ShadeformProvider(api_key)
     if provider == "runpod":
         return RunPodProvider(api_key)
+    if provider == "vast":
+        return VastProvider(api_key)
     raise CloudProviderError("Unsupported cloud GPU provider")
 
 

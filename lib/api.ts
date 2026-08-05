@@ -4,6 +4,7 @@ import type {
   CloudAccount,
   CloudGpuInstance,
   CloudOffer,
+  CloudRentalOrder,
   GpuSource,
   GpuTelemetry,
   LocalModelCatalog,
@@ -201,7 +202,7 @@ export function listCloudAccounts(): Promise<CloudAccount[]> {
 }
 
 export function createCloudAccount(input: {
-  provider: "shadeform" | "runpod";
+  provider: "shadeform" | "runpod" | "vast";
   name: string;
   api_key: string;
   budget_usd: number;
@@ -218,6 +219,10 @@ export function deleteCloudAccount(id: string): Promise<void> {
 
 export function listCloudOffers(accountId: string): Promise<CloudOffer[]> {
   return request(`/api/cloud/accounts/${encodeURIComponent(accountId)}/offers`);
+}
+
+export function listPublicVastOffers(): Promise<CloudOffer[]> {
+  return request("/api/cloud/vast-offers");
 }
 
 export function listCloudInstances(): Promise<CloudGpuInstance[]> {
@@ -239,6 +244,18 @@ export function refreshCloudGpu(id: string): Promise<CloudGpuInstance> {
 
 export function terminateCloudGpu(id: string): Promise<CloudGpuInstance> {
   return request(`/api/cloud/instances/${encodeURIComponent(id)}/terminate`, { method: "POST", body: "{}" });
+}
+
+export function getCloudPaymentConfig(): Promise<{ enabled: boolean; provider: string; currency: string; webhook_configured: boolean }> {
+  return request("/api/cloud/payment-config");
+}
+
+export function createCloudCheckout(input: { account_id: string; offer_id: string; hours: number }): Promise<CloudRentalOrder> {
+  return request("/api/cloud/checkout", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function getCloudRentalOrder(id: string): Promise<CloudRentalOrder> {
+  return request(`/api/cloud/orders/${encodeURIComponent(id)}`);
 }
 
 export async function getGpuTelemetry(sourceId?: string | null): Promise<GpuTelemetry> {

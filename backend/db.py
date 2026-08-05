@@ -192,12 +192,29 @@ CREATE TABLE IF NOT EXISTS research_token_usage (
 
 CREATE TABLE IF NOT EXISTS cloud_provider_accounts (
     id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL CHECK (provider IN ('shadeform', 'runpod')),
+    provider TEXT NOT NULL CHECK (provider IN ('shadeform', 'runpod', 'vast')),
     name TEXT NOT NULL,
     secret_ref TEXT NOT NULL,
     settings_json TEXT NOT NULL DEFAULT '{}',
     budget_usd REAL NOT NULL CHECK (budget_usd > 0),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cloud_rental_orders (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES cloud_provider_accounts(id) ON DELETE CASCADE,
+    offer_id TEXT NOT NULL,
+    gpu_name TEXT NOT NULL,
+    hours REAL NOT NULL CHECK (hours > 0),
+    hourly_price_usd REAL NOT NULL CHECK (hourly_price_usd >= 0),
+    total_usd REAL NOT NULL CHECK (total_usd > 0),
+    status TEXT NOT NULL CHECK (status IN ('checkout_open', 'provisioning', 'active', 'failed', 'cancelled')),
+    stripe_session_id TEXT UNIQUE,
+    checkout_url TEXT,
+    cloud_instance_id TEXT REFERENCES cloud_gpu_instances(id) ON DELETE SET NULL,
+    error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -235,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_experiments_research ON experiments(research_id, 
 CREATE INDEX IF NOT EXISTS idx_logs_research ON research_logs(research_id, id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_research ON research_token_usage(research_id, id);
 CREATE INDEX IF NOT EXISTS idx_cloud_instances_account_status ON cloud_gpu_instances(provider_account_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_orders_status ON cloud_rental_orders(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 """
 
@@ -277,6 +295,12 @@ class Database:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = NORMAL")
             connection.executescript(SCHEMA)
+            cloud_account_sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cloud_provider_accounts'"
+            ).fetchone()
+            cloud_account_sql = str(cloud_account_sql_row["sql"] if cloud_account_sql_row else "")
+            if "'vast'" not in cloud_account_sql:
+                self._migrate_cloud_accounts_for_vast(connection)
             research_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -339,6 +363,33 @@ class Database:
                     "ALTER TABLE experiments ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0"
                 )
             self._backfill_experiment_token_counts(connection)
+
+    @staticmethod
+    def _migrate_cloud_accounts_for_vast(connection: sqlite3.Connection) -> None:
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE cloud_provider_accounts_vast_migration (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL CHECK (provider IN ('shadeform', 'runpod', 'vast')),
+                    name TEXT NOT NULL,
+                    secret_ref TEXT NOT NULL,
+                    settings_json TEXT NOT NULL DEFAULT '{}',
+                    budget_usd REAL NOT NULL CHECK (budget_usd > 0),
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO cloud_provider_accounts_vast_migration
+                    SELECT * FROM cloud_provider_accounts;
+                DROP TABLE cloud_provider_accounts;
+                ALTER TABLE cloud_provider_accounts_vast_migration RENAME TO cloud_provider_accounts;
+                """
+            )
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_researches_queue "
                 "ON researches(status, queue_order, queued_at)"
@@ -637,6 +688,51 @@ class Database:
                  json.dumps(values.get("settings") or {}), values["budget_usd"], now, now),
             )
         return self.get_cloud_account(account_id) or {}
+
+    def create_cloud_rental_order(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        order_id, now = str(uuid.uuid4()), utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO cloud_rental_orders
+                   (id, account_id, offer_id, gpu_name, hours, hourly_price_usd, total_usd,
+                    status, stripe_session_id, checkout_url, cloud_instance_id, error, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'checkout_open', NULL, NULL, NULL, NULL, ?, ?)""",
+                (order_id, values["account_id"], values["offer_id"], values["gpu_name"],
+                 values["hours"], values["hourly_price_usd"], values["total_usd"], now, now),
+            )
+        return self.get_cloud_rental_order(order_id) or {}
+
+    def get_cloud_rental_order(self, order_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM cloud_rental_orders WHERE id = ?", (order_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_cloud_rental_order(self, order_id: str, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        allowed = {"status", "stripe_session_id", "checkout_url", "cloud_instance_id", "error"}
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if not updates:
+            return self.get_cloud_rental_order(order_id)
+        updates["updated_at"] = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE cloud_rental_orders SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+                (*updates.values(), order_id),
+            )
+            if not cursor.rowcount:
+                return None
+        return self.get_cloud_rental_order(order_id)
+
+    def claim_cloud_rental_order(self, order_id: str, stripe_session_id: str) -> bool:
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE cloud_rental_orders
+                   SET status = 'provisioning', stripe_session_id = ?, updated_at = ?
+                   WHERE id = ? AND status = 'checkout_open'""",
+                (stripe_session_id, utc_now(), order_id),
+            )
+        return cursor.rowcount == 1
 
     def delete_cloud_account(self, account_id: str) -> dict[str, Any] | None:
         account = self.get_cloud_account(account_id)

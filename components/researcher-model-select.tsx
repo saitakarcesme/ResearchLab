@@ -83,7 +83,6 @@ export function ResearcherModelSelect({
 
   useLayoutEffect(() => {
     if (!open) {
-      setMenuPosition(null);
       return;
     }
 

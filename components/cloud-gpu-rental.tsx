@@ -1,20 +1,35 @@
 "use client";
 
-import { ExternalLink, LoaderCircle, RefreshCw, Server, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, ExternalLink, LoaderCircle, Minus, Plus, RefreshCw, Server, Trash2, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { FaApplePay } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createCloudAccount,
+  createCloudCheckout,
   deleteCloudAccount,
+  getCloudPaymentConfig,
+  getCloudRentalOrder,
   listCloudAccounts,
   listCloudInstances,
   listCloudOffers,
+  listPublicVastOffers,
   refreshCloudGpu,
-  rentCloudGpu,
   terminateCloudGpu,
 } from "@/lib/api";
-import type { CloudAccount, CloudGpuInstance, CloudOffer } from "@/lib/types";
+import type { CloudAccount, CloudGpuInstance, CloudOffer, CloudRentalOrder } from "@/lib/types";
 
-const initialAccount = { provider: "shadeform" as "shadeform" | "runpod", name: "", api_key: "", budget_usd: 25, ssh_key_id: "", workspace_path: "/workspace/researchlab" };
+const initialAccount = {
+  provider: "vast" as const,
+  name: "Vast.ai",
+  api_key: "",
+  budget_usd: 100,
+  workspace_path: "/workspace/researchlab",
+};
+
+function money(value: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(value);
+}
 
 export function CloudGpuRental() {
   const [accounts, setAccounts] = useState<CloudAccount[]>([]);
@@ -22,87 +37,206 @@ export function CloudGpuRental() {
   const [offers, setOffers] = useState<CloudOffer[]>([]);
   const [accountId, setAccountId] = useState("");
   const [selectedOffer, setSelectedOffer] = useState("");
-  const [maxHours, setMaxHours] = useState(4);
+  const [hours, setHours] = useState(1);
   const [form, setForm] = useState(initialAccount);
   const [showConnect, setShowConnect] = useState(false);
+  const [paymentEnabled, setPaymentEnabled] = useState(false);
+  const [order, setOrder] = useState<CloudRentalOrder | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [nextAccounts, nextInstances] = await Promise.all([listCloudAccounts(), listCloudInstances()]);
+    const [nextAccounts, nextInstances, payment, publicOffers] = await Promise.all([
+      listCloudAccounts(), listCloudInstances(), getCloudPaymentConfig(), listPublicVastOffers(),
+    ]);
+    const vastAccounts = nextAccounts.filter((account) => account.provider === "vast");
     setAccounts(nextAccounts);
     setInstances(nextInstances);
-    setAccountId((current) => current || nextAccounts[0]?.id || "");
+    setPaymentEnabled(payment.enabled);
+    setOffers((current) => current.length ? current : publicOffers);
+    setSelectedOffer((current) => current || publicOffers[0]?.id || "");
+    setAccountId((current) => current || vastAccounts[0]?.id || "");
+  }, []);
+
+  const loadOffers = useCallback(async (nextAccountId: string) => {
+    setBusy("offers");
+    try {
+      const values = await listCloudOffers(nextAccountId);
+      setOffers(values);
+      setSelectedOffer((current) => values.some((offer) => offer.id === current) ? current : values[0]?.id ?? "");
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Live Vast.ai offers are unavailable.");
+    } finally {
+      setBusy(null);
+    }
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load().catch((reason) => setError(reason instanceof Error ? reason.message : "Cloud GPU data is unavailable.")), 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
-  useEffect(() => {
-    if (!accountId) return;
     const timer = window.setTimeout(() => {
-      setBusy("offers");
-      void listCloudOffers(accountId)
-      .then((values) => { setOffers(values); setSelectedOffer(values[0]?.id ?? ""); setError(null); })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : "Offers are unavailable."))
-      .finally(() => setBusy(null));
+      void load().catch((reason) => setError(reason instanceof Error ? reason.message : "Cloud GPU data is unavailable."));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [accountId]);
+  }, [load]);
+
+  useEffect(() => {
+    if (!accountId) return;
+    const timer = window.setTimeout(() => void loadOffers(accountId), 0);
+    return () => window.clearTimeout(timer);
+  }, [accountId, loadOffers]);
+
+  useEffect(() => {
+    if (!order || !["checkout_open", "provisioning"].includes(order.status)) return;
+    const poll = async () => {
+      try {
+        const next = await getCloudRentalOrder(order.id);
+        setOrder(next);
+        if (next.status === "active") await load();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Payment status is unavailable.");
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 2500);
+    return () => window.clearInterval(timer);
+  }, [load, order]);
+
+  const chosen = useMemo(() => offers.find((offer) => offer.id === selectedOffer) ?? null, [offers, selectedOffer]);
+  const estimated = chosen ? chosen.hourly_price_usd * hours : 0;
+  const paymentMinimumMet = estimated + 1e-9 >= 0.5;
 
   async function connect(event: React.FormEvent) {
-    event.preventDefault(); setBusy("connect"); setError(null);
+    event.preventDefault();
+    setBusy("connect");
+    setError(null);
     try {
-      await createCloudAccount(form);
-      setForm(initialAccount); setShowConnect(false); await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Provider could not be connected."); }
-    finally { setBusy(null); }
+      const account = await createCloudAccount(form);
+      setForm(initialAccount);
+      setShowConnect(false);
+      await load();
+      setAccountId(account.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Vast.ai could not be connected.");
+    } finally {
+      setBusy(null);
+    }
   }
 
-  async function rent() {
-    const offer = offers.find((value) => value.id === selectedOffer);
-    if (!offer) return;
-    setBusy("rent"); setError(null);
+  async function checkout() {
+    if (!chosen) return;
+    if (!accountId) {
+      setShowConnect(true);
+      setError("Connect your Vast.ai API key once; the selected offer and duration will stay here.");
+      return;
+    }
+    setBusy("checkout");
+    setError(null);
     try {
-      await rentCloudGpu({ account_id: accountId, offer_id: offer.id, name: `ResearchLab ${offer.gpu}`, max_hours: maxHours });
-      await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "GPU could not be rented."); }
-    finally { setBusy(null); }
+      setOrder(await createCloudCheckout({ account_id: accountId, offer_id: chosen.id, hours }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Apple Pay checkout could not be created.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
     <section className="cloud-rental">
-      <div className="settings-section-heading"><div><strong>Rent a GPU</strong><span>Shadeform or RunPod · billed by the provider</span></div><button className="text-button" type="button" onClick={() => setShowConnect((value) => !value)}>{showConnect ? "Close" : "Connect provider"}</button></div>
-      {showConnect ? (
-        <form className="source-form cloud-account-form" onSubmit={connect}>
-          <div className="field-grid two-columns">
-            <label><span>Provider</span><select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value as "shadeform" | "runpod" })}><option value="shadeform">Shadeform</option><option value="runpod">RunPod</option></select></label>
-            <label><span>Connection name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Personal cloud" /></label>
-            <label><span>API key</span><input required type="password" autoComplete="off" value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} /></label>
-            <label><span>App budget (USD)</span><input required type="number" min="1" step="1" value={form.budget_usd} onChange={(event) => setForm({ ...form, budget_usd: Number(event.target.value) })} /></label>
-            {form.provider === "shadeform" ? <label><span>Shadeform SSH key ID</span><input required value={form.ssh_key_id} onChange={(event) => setForm({ ...form, ssh_key_id: event.target.value })} /></label> : null}
-            <label><span>Remote workspace</span><input required value={form.workspace_path} onChange={(event) => setForm({ ...form, workspace_path: event.target.value })} /></label>
-          </div>
-          <p className="form-note">The key is encrypted with Windows DPAPI. Money stays with the provider; this budget is a hard ResearchLab reservation limit.</p>
+      <div className="cloud-rental-heading">
+        <div><strong>Vast.ai marketplace</strong><span>Verified, single-GPU machines · live hourly prices</span></div>
+        <div className="cloud-rental-heading-actions">
+          {accountId ? <button type="button" aria-label="Refresh GPU offers" onClick={() => void loadOffers(accountId)}><RefreshCw className={busy === "offers" ? "spin" : ""} size={14} /></button> : null}
+          <button className="text-button" type="button" onClick={() => setShowConnect((value) => !value)}>{showConnect ? "Close" : accountId ? "Provider" : "Connect Vast.ai"}</button>
+        </div>
+      </div>
+
+      {showConnect || !accountId ? (
+        <form className="vast-connect" onSubmit={connect}>
+          <div><strong>Connect your Vast.ai account</strong><span>The API key stays encrypted on this Windows computer.</span></div>
+          <label><span>Vast.ai API key</span><input required type="password" autoComplete="off" value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="Paste a scoped API key" /></label>
+          <label><span>Rental limit</span><input required type="number" min="1" step="1" value={form.budget_usd} onChange={(event) => setForm({ ...form, budget_usd: Number(event.target.value) })} /></label>
           <button className="primary-button compact" disabled={busy === "connect"}>{busy === "connect" ? <LoaderCircle className="spin" size={14} /> : null}Connect</button>
         </form>
       ) : null}
 
-      {accounts.length ? (
-        <div className="cloud-rent-controls">
-          <label><span>Provider account</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name} · ${account.budget_usd.toFixed(0)} budget</option>)}</select></label>
-          <label><span>Available GPU</span><select value={selectedOffer} onChange={(event) => setSelectedOffer(event.target.value)} disabled={busy === "offers"}>{offers.map((offer) => <option value={offer.id} key={offer.id}>{offer.gpu} · {offer.region} · ${offer.hourly_price_usd.toFixed(2)}/h</option>)}</select></label>
-          <label><span>Maximum hours</span><input type="number" min="0.25" max="720" step="0.25" value={maxHours} onChange={(event) => setMaxHours(Number(event.target.value))} /></label>
-          <button className="primary-button compact" type="button" disabled={!selectedOffer || busy != null} onClick={() => void rent()}>{busy === "rent" ? <LoaderCircle className="spin" size={14} /> : <Server size={14} />}Rent</button>
+      {offers.length || accountId ? (
+        <>
+          <div className="gpu-offer-grid" aria-busy={busy === "offers"}>
+            {offers.slice(0, 8).map((offer) => (
+              <button
+                className={`gpu-offer-card${selectedOffer === offer.id ? " gpu-offer-card-selected" : ""}`}
+                key={offer.id}
+                type="button"
+                onClick={() => setSelectedOffer(offer.id)}
+              >
+                <div className="gpu-offer-visual" aria-hidden="true"><i /><i /><i /></div>
+                <span className="gpu-offer-provider">Vast.ai verified</span>
+                <strong>{offer.gpu}</strong>
+                <span>{offer.vram_gb ? `${Number(offer.vram_gb.toFixed(1))} GB VRAM` : "NVIDIA CUDA"} · {offer.region}</span>
+                <div><b>{money(offer.hourly_price_usd)}</b><small>/ hour</small>{selectedOffer === offer.id ? <Check size={14} /> : null}</div>
+              </button>
+            ))}
+            {busy === "offers" && !offers.length ? <div className="gpu-offers-loading"><LoaderCircle className="spin" size={18} /> Reading live inventory</div> : null}
+          </div>
+
+          {chosen ? (
+            <div className="gpu-checkout-bar">
+              <div className="gpu-checkout-selection"><span>Selected</span><strong>{chosen.gpu}</strong><small>{money(chosen.hourly_price_usd)} / hour</small></div>
+              <div className="hour-stepper" aria-label="Rental duration">
+                <button type="button" aria-label="Remove one hour" disabled={hours <= 1} onClick={() => setHours((value) => Math.max(1, value - 1))}><Minus size={14} /></button>
+                <div><strong>{hours}</strong><span>{hours === 1 ? "hour" : "hours"}</span></div>
+                <button type="button" aria-label="Add one hour" onClick={() => setHours((value) => Math.min(720, value + 1))}><Plus size={14} /></button>
+              </div>
+              <div className="gpu-checkout-total"><span>Estimated</span><strong>{money(estimated)}</strong></div>
+              <button className="apple-pay-button" type="button" aria-label="Pay with Apple Pay" disabled={!paymentEnabled || !paymentMinimumMet || busy != null} onClick={() => void checkout()}>{busy === "checkout" ? <LoaderCircle className="spin" size={17} /> : <FaApplePay size={43} aria-hidden="true" />}</button>
+            </div>
+          ) : null}
+          {!paymentEnabled ? <p className="payment-setup-note">Live prices are active. Add the Stripe server key to activate Apple Pay checkout.</p> : null}
+          {paymentEnabled && !paymentMinimumMet && chosen ? <p className="payment-setup-note">Increase the duration to {Math.ceil(0.5 / chosen.hourly_price_usd)} hours to reach the $0.50 checkout minimum.</p> : null}
+        </>
+      ) : null}
+
+      {instances.length ? (
+        <div className="cloud-instances">
+          {instances.map((instance) => (
+            <div className="cloud-instance" key={instance.id}>
+              <Server size={15} />
+              <div><strong>{instance.name}</strong><span>{instance.status} · {money(instance.estimated_spend_usd)} used / {money(instance.max_spend_usd)} limit</span></div>
+              <code>{instance.host ?? "Provisioning…"}</code>
+              <button type="button" aria-label="Refresh rental" onClick={() => void refreshCloudGpu(instance.id).then(load)}><RefreshCw size={13} /></button>
+              {!['terminated', 'deleted'].includes(instance.status) ? <button type="button" aria-label="Terminate rental" onClick={() => void terminateCloudGpu(instance.id).then(load)}><Trash2 size={13} /></button> : null}
+            </div>
+          ))}
         </div>
-      ) : <p className="form-note">Connect a provider to see its live availability and prices.</p>}
+      ) : null}
 
       <div className="cloud-account-links">
-        {accounts.map((account) => <div key={account.id}><span>{account.provider}</span><a href={account.billing_url} target="_blank" rel="noreferrer">Add provider credit <ExternalLink size={12} /></a><button type="button" aria-label={`Disconnect ${account.name}`} onClick={() => void deleteCloudAccount(account.id).then(load).catch((reason) => setError(reason.message))}><Trash2 size={12} /></button></div>)}
+        {accounts.filter((account) => account.provider === "vast").map((account) => (
+          <div key={account.id}><span>{account.name}</span><a href={account.billing_url} target="_blank" rel="noreferrer">Vast credit <ExternalLink size={12} /></a><button type="button" aria-label={`Disconnect ${account.name}`} onClick={() => void deleteCloudAccount(account.id).then(load).catch((reason) => setError(reason.message))}><Trash2 size={12} /></button></div>
+        ))}
       </div>
-      {instances.map((instance) => <div className="cloud-instance" key={instance.id}><div><strong>{instance.name}</strong><span>{instance.status} · ${instance.estimated_spend_usd.toFixed(2)} estimated / ${instance.max_spend_usd.toFixed(2)} limit</span></div><code>{instance.host ?? "Provisioning…"}</code><button type="button" aria-label="Refresh rental" onClick={() => void refreshCloudGpu(instance.id).then(load)}><RefreshCw size={13} /></button>{!["terminated", "deleted"].includes(instance.status) ? <button type="button" aria-label="Terminate rental" onClick={() => void terminateCloudGpu(instance.id).then(load)}><Trash2 size={13} /></button> : null}</div>)}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
+
+      {order ? (
+        <div className="checkout-qr-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOrder(null)}>
+          <section className="checkout-qr" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+            <button className="checkout-close" type="button" aria-label="Close checkout" onClick={() => setOrder(null)}><X size={16} /></button>
+            {order.status === "active" ? (
+              <><div className="checkout-success"><Check size={24} /></div><h2 id="checkout-title">GPU is starting</h2><p>Payment confirmed. The new Vast.ai machine is being added to your GPU sources.</p></>
+            ) : order.status === "failed" ? (
+              <><h2 id="checkout-title">Provisioning needs attention</h2><p>{order.error}</p></>
+            ) : (
+              <>
+                <span className="checkout-eyebrow">Apple Pay · phone checkout</span>
+                <h2 id="checkout-title">Scan to rent {order.gpu_name}</h2>
+                <p>{Number(order.hours.toFixed(2))} hour · {money(order.total_usd)}. The GPU starts only after Stripe confirms payment.</p>
+                {order.checkout_url ? <div className="checkout-qr-code"><QRCodeSVG value={order.checkout_url} size={220} bgColor="#ffffff" fgColor="#050505" level="M" /></div> : <LoaderCircle className="spin" size={24} />}
+                {order.checkout_url ? <a href={order.checkout_url} target="_blank" rel="noreferrer">Open checkout on this device <ExternalLink size={13} /></a> : null}
+                <small>{order.status === "provisioning" ? "Payment received · provisioning" : "Waiting for payment"}</small>
+              </>
+            )}
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -49,6 +49,28 @@ uses the Windows API through the same origin, so local-GPU work still runs on
 this computer. The Windows computer and ResearchLab process must remain on.
 Tailscale Serve does not expose the app to the public internet.
 
+### Vast.ai rental and Apple Pay
+
+The GPUs page reads verified single-GPU offers directly from Vast.ai. Connect a
+Vast API key with user-read and instance-write permissions to rent a selected
+offer. Vast requires prepaid provider credit; ResearchLab checks that balance
+before opening checkout.
+
+Apple Pay uses a Stripe-hosted Checkout session and a phone QR code. Configure
+the backend process with:
+
+```powershell
+$env:STRIPE_SECRET_KEY = "sk_live_..."
+$env:STRIPE_WEBHOOK_SECRET = "whsec_..."
+$env:AUTORESEARCH_PUBLIC_APP_URL = "https://your-private-researchlab-url"
+```
+
+Point the Stripe webhook at
+`https://your-private-researchlab-url/api/cloud/stripe-webhook`. The API also
+polls the signed Checkout session, so a paid local checkout can recover if a
+webhook is briefly delayed. Payment confirmation is idempotent: a rental order
+can provision only one instance.
+
 Lab runs measurable GPU experiments and model benchmarks. The selected
 research agent is persisted separately from the model being benchmarked.
 

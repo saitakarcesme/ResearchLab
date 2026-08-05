@@ -40,7 +40,7 @@ class GpuSourceUpdate(StrictModel):
 
 
 class CloudAccountCreate(StrictModel):
-    provider: Literal["shadeform", "runpod"]
+    provider: Literal["shadeform", "runpod", "vast"]
     name: str = Field(min_length=1, max_length=100)
     api_key: str = Field(min_length=8, max_length=1000)
     budget_usd: float = Field(gt=0, le=100000)
@@ -54,6 +54,12 @@ class CloudRentCreate(StrictModel):
     offer_id: str = Field(min_length=1, max_length=500)
     name: str = Field(min_length=1, max_length=100)
     max_hours: float = Field(gt=0, le=720)
+
+
+class CloudCheckoutCreate(StrictModel):
+    account_id: str = Field(min_length=1, max_length=100)
+    offer_id: str = Field(min_length=1, max_length=500)
+    hours: float = Field(ge=0.25, le=720)
 
 
 class ResearchCreate(StrictModel):

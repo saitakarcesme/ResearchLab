@@ -163,7 +163,7 @@ export interface GpuSource {
 
 export interface CloudAccount {
   id: string;
-  provider: "shadeform" | "runpod";
+  provider: "shadeform" | "runpod" | "vast";
   name: string;
   budget_usd: number;
   enabled: boolean;
@@ -181,12 +181,14 @@ export interface CloudOffer {
   region: string;
   hourly_price_usd: number;
   available: boolean;
+  gpu_count?: number;
+  reliability?: number | null;
 }
 
 export interface CloudGpuInstance {
   id: string;
   provider_account_id: string;
-  provider: "shadeform" | "runpod";
+  provider: "shadeform" | "runpod" | "vast";
   provider_account_name: string;
   gpu_source_id: string | null;
   name: string;
@@ -196,6 +198,22 @@ export interface CloudGpuInstance {
   estimated_spend_usd: number;
   host: string | null;
   created_at: string;
+}
+
+export interface CloudRentalOrder {
+  id: string;
+  account_id: string;
+  offer_id: string;
+  gpu_name: string;
+  hours: number;
+  hourly_price_usd: number;
+  total_usd: number;
+  status: "checkout_open" | "provisioning" | "active" | "failed" | "cancelled";
+  checkout_url: string | null;
+  cloud_instance_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Article {

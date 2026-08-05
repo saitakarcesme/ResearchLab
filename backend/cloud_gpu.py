@@ -32,6 +32,13 @@ class CloudGpuManager:
             raise KeyError(account_id)
         return self._client(account).offers()
 
+    def account_credit(self, account_id: str) -> float | None:
+        account = self.database.get_cloud_account(account_id)
+        if not account:
+            raise KeyError(account_id)
+        credit_reader = getattr(self._client(account), "credit_balance", None)
+        return credit_reader() if callable(credit_reader) else None
+
     def rent(self, account_id: str, offer_id: str, *, name: str, max_hours: float) -> dict[str, Any]:
         account = self.database.get_cloud_account(account_id)
         if not account:
@@ -54,8 +61,10 @@ class CloudGpuManager:
             if not ssh_key_id:
                 raise ValueError("Shadeform requires an SSH key ID in the provider settings")
             remote = client.create(offer["id"], name=name, ssh_key_id=ssh_key_id, max_spend_usd=max_spend)
-        else:
+        elif account["provider"] == "runpod":
             remote = client.create(offer["id"], name=name, image_name=str(settings.get("image_name") or "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04"), max_spend_usd=max_spend)
+        else:
+            remote = client.create(offer["id"], name=name, image_name=str(settings.get("image_name") or "pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel"), max_spend_usd=max_spend)
         return self.database.create_cloud_instance({
             "provider_account_id": account_id,
             "external_id": remote["external_id"],

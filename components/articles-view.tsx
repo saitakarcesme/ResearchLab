@@ -33,10 +33,18 @@ export function ArticlesView() {
         <div className="quiet-row centered collection-loading"><LoaderCircle className="spin" size={16} /> Loading articles</div>
       ) : error ? null : articles.length ? (
         <div className="article-shelf">
-          {articles.map((article, index) => (
+          {articles.map((article, index) => {
+            const words = article.title.trim().split(/\s+/).filter(Boolean);
+            const monogram = words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+            return (
             <Link className={`article-cover cover-${index % 4}`} href={articlePath(article)} key={article.id}>
               <div className="cover-sheen" aria-hidden="true" />
-              <BookOpen size={18} strokeWidth={1.6} />
+              <div className="cover-orbit" aria-hidden="true"><i /><i /><i /></div>
+              <div className="cover-topline">
+                <BookOpen size={17} strokeWidth={1.45} />
+                <span>{String(index + 1).padStart(2, "0")}</span>
+              </div>
+              <div className="cover-monogram" aria-hidden="true">{monogram || "RL"}</div>
               <div className="cover-title">
                 <span>{article.article_kind === "general" ? "Practical guide" : "Lab report"}</span>
                 <h2>{article.title}</h2>
@@ -50,7 +58,7 @@ export function ArticlesView() {
                 <ArrowUpRight size={16} />
               </div>
             </Link>
-          ))}
+          )})}
         </div>
       ) : (
         <div className="empty-collection article-empty">

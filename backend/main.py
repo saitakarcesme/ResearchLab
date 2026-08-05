@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
 from backend.cloud_gpu import CloudGpuManager
-from backend.cloud_providers import CloudProviderError
+from backend.cloud_providers import CloudProviderError, VastProvider
 from backend.config import Settings
 from backend.db import Database
 from backend.huggingface_models import (
@@ -28,12 +28,14 @@ from backend.local_models import OllamaClient, OllamaConnectionError
 from backend.researcher_models import researcher_model_catalog, resolve_researcher_model
 from backend.schemas import (
     CloudAccountCreate,
+    CloudCheckoutCreate,
     CloudRentCreate,
     GpuSourceCreate,
     GpuSourceUpdate,
     ResearchCreate,
     ResearchUpdate,
 )
+from backend.payments import PaymentConfigurationError, StripeCheckoutService
 from backend.supervisor import ResearchSupervisor
 from backend.telemetry import TelemetryService
 from backend.secret_store import SecretStore
@@ -57,6 +59,10 @@ def _ollama(request: Request) -> OllamaClient:
 
 def _cloud(request: Request) -> CloudGpuManager:
     return request.app.state.cloud_gpu
+
+
+def _payments(request: Request) -> StripeCheckoutService:
+    return request.app.state.payments
 
 
 def _local_researcher_models(
@@ -134,6 +140,7 @@ def create_app(
         app.state.ollama = OllamaClient()
         app.state.supervisor = supervisor
         app.state.cloud_gpu = cloud_gpu
+        app.state.payments = StripeCheckoutService(database, cloud_gpu)
         app.state.brief_generator = brief_generator or CodexResearchBriefGenerator(
             configured
         )
@@ -186,6 +193,13 @@ def create_app(
     def list_cloud_accounts(request: Request) -> list[dict[str, Any]]:
         return [_cloud(request).public_account(value) for value in _database(request).list_cloud_accounts()]
 
+    @app.get("/api/cloud/vast-offers")
+    def list_public_vast_offers() -> list[dict[str, Any]]:
+        try:
+            return VastProvider.public_offers()
+        except CloudProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     @app.post("/api/cloud/accounts", status_code=status.HTTP_201_CREATED)
     def create_cloud_account(payload: CloudAccountCreate, request: Request) -> dict[str, Any]:
         secret_ref = _cloud(request).secrets.put(payload.api_key)
@@ -223,6 +237,41 @@ def create_app(
     @app.get("/api/cloud/instances")
     def list_cloud_instances(request: Request) -> list[dict[str, Any]]:
         return _database(request).list_cloud_instances()
+
+    @app.get("/api/cloud/payment-config")
+    def cloud_payment_config(request: Request) -> dict[str, Any]:
+        return _payments(request).public_config()
+
+    @app.post("/api/cloud/checkout", status_code=status.HTTP_201_CREATED)
+    def create_cloud_checkout(payload: CloudCheckoutCreate, request: Request) -> dict[str, Any]:
+        try:
+            return _payments(request).create(payload.account_id, payload.offer_id, payload.hours)
+        except KeyError as exc:
+            raise _not_found("Cloud account") from exc
+        except CloudProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except (PaymentConfigurationError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/cloud/orders/{order_id}")
+    def get_cloud_order(order_id: str, request: Request) -> dict[str, Any]:
+        try:
+            return _payments(request).sync(order_id)
+        except KeyError as exc:
+            raise _not_found("Cloud rental order") from exc
+        except (PaymentConfigurationError, CloudProviderError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/cloud/stripe-webhook")
+    async def stripe_cloud_webhook(request: Request, stripe_signature: str | None = Header(default=None)) -> dict[str, bool]:
+        if not stripe_signature:
+            raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+        raw = await request.body()
+        try:
+            _payments(request).handle_webhook(raw, stripe_signature)
+        except (PaymentConfigurationError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"received": True}
 
     @app.post("/api/cloud/instances", status_code=status.HTTP_201_CREATED)
     def rent_cloud_instance(payload: CloudRentCreate, request: Request) -> dict[str, Any]:

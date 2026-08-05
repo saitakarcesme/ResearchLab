@@ -37,9 +37,12 @@ export function GpusView() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const initial = window.setTimeout(() => void refresh(), 0);
     const timer = window.setInterval(() => void refresh(), 4000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   return (
@@ -85,7 +88,7 @@ export function GpusView() {
       </section>
 
       <section className="gpu-page-section">
-        <div className="gpu-page-section-title"><Cloud size={15} /><div><strong>Cloud rental</strong><span>Provider credit and billing stay with RunPod or Shadeform.</span></div></div>
+        <div className="gpu-page-section-title"><Cloud size={15} /><div><strong>Cloud rental</strong><span>Choose a live Vast.ai offer and pay from your phone.</span></div></div>
         <CloudGpuRental />
       </section>
     </div>
