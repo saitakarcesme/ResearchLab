@@ -463,35 +463,35 @@ a {
 }
 
 .researcher-model-menu {
-  position: absolute;
-  top: calc(100% + 9px);
-  right: 0;
-  z-index: 120;
+  position: fixed;
+  z-index: 1000;
   width: min(340px, calc(100vw - 32px));
   max-height: min(430px, calc(100vh - 130px));
   padding: 8px;
   overflow: auto;
   border: 1px solid rgba(174, 174, 174, 0.16);
   border-radius: 17px;
-  background: rgba(7, 7, 7, 0.58);
+  background: rgba(8, 8, 8, 0.84);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48), 0 0 35px rgba(116, 116, 116, 0.1), inset 0 1px rgba(255, 255, 255, 0.045);
   scrollbar-color: rgba(154, 154, 154, 0.26) transparent;
-  -webkit-backdrop-filter: blur(48px) saturate(82%);
-  backdrop-filter: blur(48px) saturate(82%);
-  isolation: isolate;
-  transform: translateZ(0);
+  -webkit-backdrop-filter: blur(34px) saturate(70%);
+  backdrop-filter: blur(34px) saturate(70%);
+  overscroll-behavior: contain;
 }
 
 .researcher-model-menu::before {
   position: absolute;
-  z-index: -1;
+  z-index: 0;
   border-radius: inherit;
-  background: rgba(5, 5, 5, 0.42);
-  -webkit-backdrop-filter: blur(48px) saturate(82%);
-  backdrop-filter: blur(48px) saturate(82%);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.005) 48%, rgba(0, 0, 0, 0.12));
   content: "";
   inset: 0;
   pointer-events: none;
+}
+
+.researcher-model-menu > * {
+  position: relative;
+  z-index: 1;
 }
 
 .researcher-model-menu-heading {
@@ -4255,4 +4255,226 @@ a {
   .topic-source-row > small {
     display: none;
   }
+}
+
+/* GPU inventory lives on its own route; Lab remains focused on research. */
+.gpus-page {
+  width: min(1060px, calc(100vw - 280px));
+  padding: 72px 0 100px;
+  margin-right: 0;
+  margin-left: max(220px, calc((100vw - 1060px) / 2));
+}
+
+.gpus-page-heading,
+.gpu-page-section-title,
+.gpu-inventory-card-title,
+.settings-section-heading,
+.cloud-instance,
+.cloud-account-links > div {
+  display: flex;
+  align-items: center;
+}
+
+.gpus-page-heading {
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.gpus-page-heading h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(32px, 4vw, 52px);
+  font-weight: 540;
+  letter-spacing: -.045em;
+}
+
+.gpus-page-heading > span {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gpu-inventory {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.gpu-inventory-card,
+.gpu-page-section {
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 22px;
+  background: rgba(15, 15, 15, .62);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .025);
+  backdrop-filter: blur(20px);
+}
+
+.gpu-inventory-card {
+  min-height: 250px;
+  padding: 22px;
+}
+
+.gpu-inventory-card-title {
+  gap: 11px;
+}
+
+.gpu-inventory-card-title > svg,
+.gpu-page-section-title > svg {
+  color: #d8d8d8;
+}
+
+.gpu-inventory-card-title > div,
+.gpu-page-section-title > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gpu-inventory-card-title strong,
+.gpu-page-section-title strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.gpu-inventory-card-title span,
+.gpu-page-section-title span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpu-inventory-card-title em {
+  color: #d2d2d2;
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.gpu-inventory-utilization {
+  display: flex;
+  flex-direction: column;
+  margin: 35px 0 28px;
+}
+
+.gpu-inventory-utilization strong {
+  color: var(--text);
+  font-size: 50px;
+  font-weight: 430;
+  letter-spacing: -.055em;
+  line-height: .95;
+}
+
+.gpu-inventory-utilization span {
+  margin-top: 7px;
+  color: var(--faint);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.gpu-inventory-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.gpu-inventory-card dl div {
+  min-width: 0;
+  padding-top: 11px;
+  border-top: 1px solid rgba(255, 255, 255, .07);
+}
+
+.gpu-inventory-card dt,
+.gpu-inventory-card dd {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpu-inventory-card dt { color: var(--faint); font-size: 8px; text-transform: uppercase; }
+.gpu-inventory-card dd { margin-top: 5px; color: var(--text); font-size: 11px; }
+
+.gpu-inventory-loading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 200px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gpu-page-section {
+  padding: 22px;
+  margin-top: 16px;
+}
+
+.gpu-page-section-title {
+  gap: 11px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+}
+
+.gpu-page-section .settings-content { width: 100%; padding: 18px 0 0; }
+.gpu-page-section .source-list { max-height: none; }
+
+.cloud-rental { padding-top: 18px; }
+.cloud-rental > .settings-section-heading { justify-content: space-between; gap: 16px; }
+.cloud-rental > .settings-section-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.cloud-rental > .settings-section-heading strong { color: var(--text); font-size: 12px; }
+.cloud-rental > .settings-section-heading span { color: var(--muted); font-size: 10px; }
+.cloud-account-form { margin-top: 16px; }
+
+.cloud-rent-controls {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr 130px auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 16px;
+}
+
+.cloud-rent-controls label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cloud-rent-controls label > span { color: var(--faint); font-size: 9px; text-transform: uppercase; }
+.cloud-rent-controls select,
+.cloud-rent-controls input {
+  min-width: 0;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  outline: 0;
+  background: #0a0a0a;
+  color: var(--text);
+}
+
+.cloud-account-links { display: grid; gap: 7px; margin-top: 14px; }
+.cloud-account-links > div { gap: 10px; min-height: 36px; padding: 0 10px; border-top: 1px solid rgba(255,255,255,.06); }
+.cloud-account-links span { color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.cloud-account-links a { display: inline-flex; gap: 5px; align-items: center; margin-left: auto; color: var(--text); font-size: 10px; }
+.cloud-account-links button,
+.cloud-instance button { display: grid; width: 30px; height: 30px; padding: 0; border: 0; place-items: center; background: transparent; color: var(--muted); }
+
+.cloud-instance {
+  gap: 12px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255,255,255,.07);
+}
+.cloud-instance > div { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.cloud-instance strong { color: var(--text); font-size: 11px; }
+.cloud-instance span,
+.cloud-instance code { color: var(--muted); font-size: 9px; }
+
+@media (max-width: 900px) {
+  .gpus-page { width: min(680px, calc(100vw - 34px)); padding-top: 110px; margin: 0 auto; }
+  .gpu-inventory { grid-template-columns: 1fr; }
+  .cloud-rent-controls { grid-template-columns: 1fr; }
 }

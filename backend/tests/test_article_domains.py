@@ -5,13 +5,13 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.article import (
     ResearchArticleGenerator,
     article_kind,
     generate_article_markdown,
-    generate_general_article_markdown,
 )
 from backend.db import Database
 from backend.main import create_app
@@ -198,7 +198,7 @@ Do not repay a missed day with an oversized reading target. Simply return at the
     assert b"do-not-pass-this-log-to-codex" not in sent
 
 
-def test_invalid_general_ai_copy_falls_back_without_leaking_run_details(
+def test_invalid_general_ai_copy_fails_instead_of_publishing_a_fixed_fallback(
     settings, monkeypatch
 ) -> None:
     def fake_run(command, **kwargs):
@@ -218,23 +218,15 @@ def test_invalid_general_ai_copy_falls_back_without_leaking_run_details(
 
     monkeypatch.setattr("backend.article.subprocess.run", fake_run)
     generator = ResearchArticleGenerator(replace(settings, execution_enabled=True))
-    markdown = generator.generate(
-        {
-            "title": "Reading Habit Guidance",
-            "original_prompt": "Ways to develop a habit of reading",
-        },
-        [],
-        [],
-    )
-
-    assert markdown == generate_general_article_markdown(
-        {
-            "title": "Reading Habit Guidance",
-            "original_prompt": "Ways to develop a habit of reading",
-        }
-    )
-    assert "commit" not in markdown
-    assert "train.py" not in markdown
+    with pytest.raises(ValueError, match="500-12000"):
+        generator.generate(
+            {
+                "title": "Reading Habit Guidance",
+                "original_prompt": "Ways to develop a habit of reading",
+            },
+            [],
+            [],
+        )
 
 
 def test_technical_prompt_uses_evidence_led_ai_structure(settings, monkeypatch) -> None:

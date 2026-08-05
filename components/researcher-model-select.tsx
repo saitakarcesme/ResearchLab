@@ -1,8 +1,16 @@
 "use client";
 
 import { Check, ChevronDown, Cloud, HardDrive } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ResearcherModel } from "@/lib/types";
+
+type MenuPosition = {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+};
 
 export function ResearcherModelSelect({
   id,
@@ -22,8 +30,10 @@ export function ResearcherModelSelect({
   onChange: (modelId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selected = models.find((model) => model.id === value);
   const groupedModels = useMemo(() => [
@@ -53,7 +63,10 @@ export function ResearcherModelSelect({
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePress = (event: PointerEvent) => {
-      if (!fieldRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!fieldRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -65,6 +78,38 @@ export function ResearcherModelSelect({
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePress);
       document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const placeMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const gutter = 16;
+      const width = Math.min(340, window.innerWidth - gutter * 2);
+      const left = Math.max(gutter, Math.min(rect.right - width, window.innerWidth - width - gutter));
+      const roomBelow = window.innerHeight - rect.bottom - gutter - 9;
+      const roomAbove = rect.top - gutter - 9;
+      const useAbove = roomBelow < 240 && roomAbove > roomBelow;
+      const maxHeight = Math.max(180, Math.min(430, useAbove ? roomAbove : roomBelow));
+      const top = useAbove
+        ? Math.max(gutter, rect.top - maxHeight - 9)
+        : rect.bottom + 9;
+      setMenuPosition({ left, top, width, maxHeight });
+    };
+
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    window.addEventListener("scroll", placeMenu, true);
+    return () => {
+      window.removeEventListener("resize", placeMenu);
+      window.removeEventListener("scroll", placeMenu, true);
     };
   }, [open]);
 
@@ -108,12 +153,19 @@ export function ResearcherModelSelect({
         <ChevronDown size={14} aria-hidden="true" />
       </button>
 
-      {open ? (
+      {open && typeof document !== "undefined" ? createPortal(
         <div
+          ref={menuRef}
           id={menuId}
           className="researcher-model-menu"
           role="listbox"
           aria-label="Research models"
+          style={menuPosition ? {
+            left: menuPosition.left,
+            top: menuPosition.top,
+            width: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
+          } : { visibility: "hidden" }}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
               event.preventDefault();
@@ -166,7 +218,8 @@ export function ResearcherModelSelect({
             );
           })}
           {error ? <p className="researcher-model-menu-error" role="alert">{error}</p> : null}
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {!compact ? (

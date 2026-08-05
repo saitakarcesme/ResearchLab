@@ -1,6 +1,9 @@
 import type {
   Article,
   BenchmarkProfile,
+  CloudAccount,
+  CloudGpuInstance,
+  CloudOffer,
   GpuSource,
   GpuTelemetry,
   LocalModelCatalog,
@@ -191,6 +194,51 @@ export function createGpuSource(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function listCloudAccounts(): Promise<CloudAccount[]> {
+  return request("/api/cloud/accounts");
+}
+
+export function createCloudAccount(input: {
+  provider: "shadeform" | "runpod";
+  name: string;
+  api_key: string;
+  budget_usd: number;
+  ssh_key_id?: string;
+  workspace_path: string;
+  image_name?: string;
+}): Promise<CloudAccount> {
+  return request("/api/cloud/accounts", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteCloudAccount(id: string): Promise<void> {
+  return request(`/api/cloud/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function listCloudOffers(accountId: string): Promise<CloudOffer[]> {
+  return request(`/api/cloud/accounts/${encodeURIComponent(accountId)}/offers`);
+}
+
+export function listCloudInstances(): Promise<CloudGpuInstance[]> {
+  return request("/api/cloud/instances");
+}
+
+export function rentCloudGpu(input: {
+  account_id: string;
+  offer_id: string;
+  name: string;
+  max_hours: number;
+}): Promise<CloudGpuInstance> {
+  return request("/api/cloud/instances", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function refreshCloudGpu(id: string): Promise<CloudGpuInstance> {
+  return request(`/api/cloud/instances/${encodeURIComponent(id)}/refresh`, { method: "POST", body: "{}" });
+}
+
+export function terminateCloudGpu(id: string): Promise<CloudGpuInstance> {
+  return request(`/api/cloud/instances/${encodeURIComponent(id)}/terminate`, { method: "POST", body: "{}" });
 }
 
 export async function getGpuTelemetry(sourceId?: string | null): Promise<GpuTelemetry> {

@@ -161,6 +161,43 @@ export interface GpuSource {
   updated_at?: string;
 }
 
+export interface CloudAccount {
+  id: string;
+  provider: "shadeform" | "runpod";
+  name: string;
+  budget_usd: number;
+  enabled: boolean;
+  settings: { ssh_key_id?: string | null; workspace_path?: string; image_name?: string | null };
+  billing_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CloudOffer {
+  id: string;
+  name: string;
+  gpu: string;
+  vram_gb: number | null;
+  region: string;
+  hourly_price_usd: number;
+  available: boolean;
+}
+
+export interface CloudGpuInstance {
+  id: string;
+  provider_account_id: string;
+  provider: "shadeform" | "runpod";
+  provider_account_name: string;
+  gpu_source_id: string | null;
+  name: string;
+  status: string;
+  hourly_price_usd: number;
+  max_spend_usd: number;
+  estimated_spend_usd: number;
+  host: string | null;
+  created_at: string;
+}
+
 export interface Article {
   id: string;
   slug: string;

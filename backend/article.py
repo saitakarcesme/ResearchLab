@@ -1087,7 +1087,8 @@ class ResearchArticleGenerator:
         schema_path = Path(__file__).resolve().parent / "general-article.schema.json"
         prompt = _one_line(research.get("original_prompt") or research.get("title"))
         kind = article_kind(research)
-        evidence_experiments = [
+        ordered_experiments = sorted(experiments, key=_experiment_number)
+        accepted_evidence = [
             {
                 "number": item.get("experiment_number"),
                 "idea": _prediction_loss_language(item.get("hypothesis")),
@@ -1097,8 +1098,52 @@ class ResearchArticleGenerator:
                 "accepted": item.get("accepted"),
                 "error": _one_line(item.get("error"))[:500] or None,
             }
-            for item in experiments[-80:]
+            for item in ordered_experiments
+            if item.get("accepted") is True or _experiment_number(item) == 1
         ]
+        rejected_groups: dict[str, list[Mapping[str, Any]]] = {}
+        for item in ordered_experiments:
+            if item.get("accepted") is not False or item.get("error"):
+                continue
+            rejected_groups.setdefault(_setting_key(item), []).append(item)
+        lower_is_better = _is_lower_better(research)
+        rejected_evidence = []
+        for family, items in rejected_groups.items():
+            measured = [item for item in items if _number(item.get("metric_value")) is not None]
+            if not measured:
+                continue
+            ranked = sorted(
+                measured,
+                key=lambda item: float(item["metric_value"]),
+                reverse=not lower_is_better,
+            )
+            representatives = [ranked[0]]
+            if len(ranked) > 1 and ranked[-1] is not ranked[0]:
+                representatives.append(ranked[-1])
+            rejected_evidence.append(
+                {
+                    "change_family": family,
+                    "attempt_count": len(items),
+                    "representative_results": [
+                        {
+                            "number": item.get("experiment_number"),
+                            "what_changed": _prediction_loss_language(item.get("change_summary")),
+                            "measured_result": item.get("metric_value"),
+                            "previous_best": item.get("previous_best"),
+                        }
+                        for item in representatives
+                    ],
+                }
+            )
+        incomplete_evidence = [
+            {
+                "number": item.get("experiment_number"),
+                "idea": _prediction_loss_language(item.get("hypothesis")),
+                "error": _one_line(item.get("error"))[:500] or "No completed measurement",
+            }
+            for item in ordered_experiments
+            if item.get("error") or item.get("accepted") is None
+        ][-12:]
         meaningful_logs = [
             {
                 "event": _one_line(item.get("event_type")),
@@ -1120,7 +1165,12 @@ class ResearchArticleGenerator:
                     "starting_value": research.get("baseline_value"),
                     "best_value": research.get("best_value"),
                 },
-                "experiments": evidence_experiments,
+                "evidence": {
+                    "accepted_and_baseline_experiments": accepted_evidence,
+                    "rejected_change_families": rejected_evidence,
+                    "incomplete_or_failed_experiments": incomplete_evidence,
+                    "total_experiment_count": len(ordered_experiments),
+                },
                 "meaningful_events": meaningful_logs,
             },
             ensure_ascii=False,
@@ -1178,7 +1228,7 @@ Evidence JSON:
                     input=instruction.encode("utf-8"),
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
-                    timeout=min(self.settings.agent_timeout_seconds, 120),
+                    timeout=min(self.settings.agent_timeout_seconds, 240),
                     check=False,
                     creationflags=creationflags,
                 )
@@ -1220,17 +1270,10 @@ Evidence JSON:
         logs: Sequence[Mapping[str, Any]],
     ) -> str:
         if self.settings.execution_enabled:
-            try:
-                return self._with_codex(research, experiments, logs)
-            except (
-                OSError,
-                subprocess.SubprocessError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-                json.JSONDecodeError,
-            ):
-                pass
+            # Never replace a failed, topic-specific writer pass with the old
+            # deterministic lab-report outline. A visible generation error is safer
+            # than silently publishing a structurally unrelated article.
+            return self._with_codex(research, experiments, logs)
         if article_kind(research) == "technical":
             return generate_article_markdown(research, experiments, logs)
         return generate_general_article_markdown(research)

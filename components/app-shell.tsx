@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { BookOpen, FlaskConical, Maximize2, Microscope, Minimize2, Settings, X } from "lucide-react";
+import { BookOpen, Cpu, FlaskConical, Maximize2, Microscope, Minimize2, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -11,6 +11,7 @@ const navigation = [
   { href: "/lab", label: "Lab", icon: FlaskConical, match: "prefix" },
   { href: "/researches", label: "Researches", icon: Microscope, match: "prefix" },
   { href: "/articles", label: "Articles", icon: BookOpen, match: "prefix" },
+  { href: "/gpus", label: "GPUs", icon: Cpu, match: "prefix" },
 ] as const;
 
 function isNavigationActive(pathname: string, item: (typeof navigation)[number]): boolean {

@@ -190,6 +190,37 @@ CREATE TABLE IF NOT EXISTS research_token_usage (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cloud_provider_accounts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('shadeform', 'runpod')),
+    name TEXT NOT NULL,
+    secret_ref TEXT NOT NULL,
+    settings_json TEXT NOT NULL DEFAULT '{}',
+    budget_usd REAL NOT NULL CHECK (budget_usd > 0),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cloud_gpu_instances (
+    id TEXT PRIMARY KEY,
+    provider_account_id TEXT NOT NULL REFERENCES cloud_provider_accounts(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    gpu_source_id TEXT REFERENCES gpu_sources(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    hourly_price_usd REAL NOT NULL CHECK (hourly_price_usd >= 0),
+    max_spend_usd REAL NOT NULL CHECK (max_spend_usd > 0),
+    host TEXT,
+    port INTEGER NOT NULL DEFAULT 22,
+    username TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    terminated_at TEXT,
+    UNIQUE(provider_account_id, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS articles (
     id TEXT PRIMARY KEY,
     research_id TEXT NOT NULL UNIQUE REFERENCES researches(id) ON DELETE CASCADE,
@@ -203,6 +234,7 @@ CREATE INDEX IF NOT EXISTS idx_researches_status ON researches(status, updated_a
 CREATE INDEX IF NOT EXISTS idx_experiments_research ON experiments(research_id, experiment_number);
 CREATE INDEX IF NOT EXISTS idx_logs_research ON research_logs(research_id, id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_research ON research_token_usage(research_id, id);
+CREATE INDEX IF NOT EXISTS idx_cloud_instances_account_status ON cloud_gpu_instances(provider_account_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 """
 
@@ -572,6 +604,109 @@ class Database:
                 raise ValueError("The default local GPU source cannot be deleted")
             connection.execute("DELETE FROM gpu_sources WHERE id = ?", (source_id,))
         return True
+
+    def list_cloud_accounts(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM cloud_provider_accounts ORDER BY created_at"
+            ).fetchall()
+        return [self._cloud_account(row) for row in rows]
+
+    def get_cloud_account(self, account_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM cloud_provider_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+        return self._cloud_account(row) if row else None
+
+    @staticmethod
+    def _cloud_account(row: sqlite3.Row) -> dict[str, Any]:
+        value = dict(row)
+        value["enabled"] = bool(value["enabled"])
+        value["settings"] = json.loads(value.pop("settings_json") or "{}")
+        return value
+
+    def create_cloud_account(self, values: Mapping[str, Any], secret_ref: str) -> dict[str, Any]:
+        account_id, now = str(uuid.uuid4()), utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO cloud_provider_accounts
+                   (id, provider, name, secret_ref, settings_json, budget_usd, enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (account_id, values["provider"], values["name"], secret_ref,
+                 json.dumps(values.get("settings") or {}), values["budget_usd"], now, now),
+            )
+        return self.get_cloud_account(account_id) or {}
+
+    def delete_cloud_account(self, account_id: str) -> dict[str, Any] | None:
+        account = self.get_cloud_account(account_id)
+        if not account:
+            return None
+        with self.transaction() as connection:
+            active = connection.execute(
+                "SELECT 1 FROM cloud_gpu_instances WHERE provider_account_id = ? AND status NOT IN ('terminated', 'deleted') LIMIT 1",
+                (account_id,),
+            ).fetchone()
+            if active:
+                raise ValueError("Terminate this account's rented GPUs before disconnecting it")
+            connection.execute("DELETE FROM cloud_provider_accounts WHERE id = ?", (account_id,))
+        return account
+
+    def create_cloud_instance(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        instance_id, now = str(uuid.uuid4()), utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO cloud_gpu_instances
+                   (id, provider_account_id, external_id, name, offer_id, status,
+                    hourly_price_usd, max_spend_usd, host, port, username, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (instance_id, values["provider_account_id"], values["external_id"], values["name"],
+                 values["offer_id"], values["status"], values["hourly_price_usd"], values["max_spend_usd"],
+                 values.get("host"), values.get("port", 22), values.get("username"), now, now),
+            )
+        return self.get_cloud_instance(instance_id) or {}
+
+    def get_cloud_instance(self, instance_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT i.*, a.provider, a.name AS provider_account_name
+                   FROM cloud_gpu_instances i JOIN cloud_provider_accounts a ON a.id = i.provider_account_id
+                   WHERE i.id = ?""", (instance_id,)
+            ).fetchone()
+        return self._cloud_instance(row) if row else None
+
+    def list_cloud_instances(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT i.*, a.provider, a.name AS provider_account_name
+                   FROM cloud_gpu_instances i JOIN cloud_provider_accounts a ON a.id = i.provider_account_id
+                   ORDER BY i.created_at DESC"""
+            ).fetchall()
+        return [self._cloud_instance(row) for row in rows]
+
+    @staticmethod
+    def _cloud_instance(row: sqlite3.Row) -> dict[str, Any]:
+        value = dict(row)
+        started = datetime.fromisoformat(value["created_at"].replace("Z", "+00:00"))
+        ended_at = value.get("terminated_at") or utc_now()
+        ended = datetime.fromisoformat(str(ended_at).replace("Z", "+00:00"))
+        value["estimated_spend_usd"] = round(max(0.0, (ended - started).total_seconds()) / 3600 * float(value["hourly_price_usd"]), 4)
+        return value
+
+    def update_cloud_instance(self, instance_id: str, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        allowed = {"status", "host", "port", "username", "gpu_source_id", "terminated_at"}
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if not updates:
+            return self.get_cloud_instance(instance_id)
+        updates["updated_at"] = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE cloud_gpu_instances SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+                (*updates.values(), instance_id),
+            )
+            if not cursor.rowcount:
+                return None
+        return self.get_cloud_instance(instance_id)
 
     def create_research(self, values: Mapping[str, Any]) -> dict[str, Any]:
         research_id, now = str(uuid.uuid4()), utc_now()
