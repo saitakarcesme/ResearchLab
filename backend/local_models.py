@@ -210,7 +210,7 @@ class OllamaClient:
         self,
         name: str,
         *,
-        timeout_seconds: float = 10,
+        timeout_seconds: float = 60,
         poll_interval_seconds: float = 0.25,
     ) -> bool:
         """Unload a model and wait for Ollama's process list to catch up."""
