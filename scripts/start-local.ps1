@@ -33,6 +33,7 @@ try {
             throw "Tailscale is not installed. Install and sign in, then run again with -EnableTailnetAccess."
         }
         & $tailscale.Source serve --bg http://localhost:3000
+        & $tailscale.Source serve --bg --set-path /assets http://localhost:7331/assets
         & $tailscale.Source serve --bg --set-path /api http://localhost:7331/api
         & $tailscale.Source serve --bg --set-path /health http://localhost:7331/health
         Write-Host "Private Mac access is enabled through Tailscale Serve."

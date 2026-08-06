@@ -4,11 +4,13 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.article import ResearchArticleGenerator, article_kind
 from backend.brief import CodexResearchBriefGenerator
@@ -175,6 +177,14 @@ def create_app(
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Last-Event-ID"],
+    )
+    app.mount(
+        "/assets",
+        StaticFiles(
+            directory=Path(__file__).resolve().parents[1] / "dist" / "client" / "assets",
+            check_dir=False,
+        ),
+        name="production-assets",
     )
 
     @app.get("/health")
