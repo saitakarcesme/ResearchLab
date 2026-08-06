@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from backend.adapters.base import AdapterContext
 from backend.adapters.ollama import OllamaBenchmarkAdapter
 from backend.db import Database
-from backend.local_models import OllamaModel
+from backend.local_models import OllamaClient, OllamaModel
 from backend.main import create_app
 from backend.supervisor import ResearchSupervisor
 from backend.telemetry import TelemetryService
@@ -88,6 +88,25 @@ class FakeOllamaClient:
     def unload(self, name: str) -> None:
         assert name == self.model.name
         self.unloads += 1
+
+
+def test_unload_waits_for_ollama_process_list_to_update(monkeypatch) -> None:
+    client = OllamaClient()
+    states = iter(
+        [
+            [{"name": "test-model:latest"}],
+            [{"name": "test-model:latest"}],
+            [],
+        ]
+    )
+    unloaded: list[str] = []
+    monkeypatch.setattr(client, "unload", unloaded.append)
+    monkeypatch.setattr(client, "running_models", lambda: next(states))
+
+    assert client.unload_and_wait(
+        "test-model:latest", timeout_seconds=1, poll_interval_seconds=0
+    )
+    assert unloaded == ["test-model:latest"]
 
 
 def _wait_for(predicate, timeout: float = 4.0) -> None:

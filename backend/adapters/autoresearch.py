@@ -866,12 +866,7 @@ Recent persisted experiment history: {json.dumps(history, ensure_ascii=False)}
             return
         model_name = model_name_from_id(model_id)
         client = OllamaClient()
-        client.unload(model_name)
-        running_names = {
-            str(item.get("name") or item.get("model") or "")
-            for item in client.running_models()
-        }
-        if model_name in running_names:
+        if not client.unload_and_wait(model_name):
             raise RuntimeError(
                 "The local research agent is still using GPU memory, so the measured training run was not started."
             )

@@ -593,17 +593,13 @@ Request JSON:
         model_name = model_name_from_id(researcher_model)
         client = OllamaClient()
         try:
-            client.unload(model_name)
-            running = {
-                str(item.get("name") or item.get("model") or "")
-                for item in client.running_models()
-            }
+            released = client.unload_and_wait(model_name)
         except Exception as exc:
             self.context.runtime.control_error = str(exc)
             raise ResearchFailed(
                 f"Could not release the local research agent before measurement: {exc}"
             ) from exc
-        if model_name in running:
+        if not released:
             message = "The local research agent is still resident on the GPU"
             self.context.runtime.control_error = message
             raise ResearchFailed(message)

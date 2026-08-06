@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -204,6 +205,28 @@ class OllamaClient:
             {"model": name, "keep_alive": 0},
             timeout_seconds=30,
         )
+
+    def unload_and_wait(
+        self,
+        name: str,
+        *,
+        timeout_seconds: float = 10,
+        poll_interval_seconds: float = 0.25,
+    ) -> bool:
+        """Unload a model and wait for Ollama's process list to catch up."""
+
+        self.unload(name)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            running = {
+                str(item.get("name") or item.get("model") or "")
+                for item in self.running_models()
+            }
+            if name not in running:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_interval_seconds)
 
 
 def _optional_text(value: Any) -> str | None:
