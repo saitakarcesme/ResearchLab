@@ -8,10 +8,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingsPanel } from "./settings-panel";
 
 const navigation = [
-  { href: "/lab", label: "Lab", icon: FlaskConical, match: "prefix" },
-  { href: "/researches", label: "Researches", icon: Microscope, match: "prefix" },
-  { href: "/articles", label: "Articles", icon: BookOpen, match: "prefix" },
-  { href: "/gpus", label: "GPUs", icon: Cpu, match: "prefix" },
+  { href: "/lab", label: "Lab", icon: FlaskConical, match: "prefix", expandedWidth: "74px" },
+  { href: "/researches", label: "Researches", icon: Microscope, match: "prefix", expandedWidth: "116px" },
+  { href: "/articles", label: "Articles", icon: BookOpen, match: "prefix", expandedWidth: "96px" },
+  { href: "/gpus", label: "GPUs", icon: Cpu, match: "prefix", expandedWidth: "84px" },
 ] as const;
 
 function isNavigationActive(pathname: string, item: (typeof navigation)[number]): boolean {
@@ -114,7 +114,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="floating-dock">
             <nav className="floating-nav" aria-label="Primary navigation">
               {navigation.map((item) => {
-                const { href, label, icon: Icon } = item;
+                const { href, label, icon: Icon, expandedWidth } = item;
                 const active = isNavigationActive(pathname, item);
                 return (
                   <Link
@@ -122,6 +122,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     key={href}
                     className={`nav-pill ${active ? "nav-pill-active" : ""}`}
                     aria-current={active ? "page" : undefined}
+                    style={{ "--nav-pill-expanded-width": expandedWidth } as React.CSSProperties}
                   >
                     <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
                     <span>{label}</span>
@@ -137,6 +138,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 type="button"
                 aria-label="GPU source settings"
                 aria-expanded={settingsOpen}
+                style={{ "--nav-pill-expanded-width": "100px" } as React.CSSProperties}
                 onClick={() => setSettingsOpen(true)}
               >
                 <Settings size={18} strokeWidth={1.8} aria-hidden="true" />
@@ -148,6 +150,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 type="button"
                 aria-label={fullscreen ? "Exit fullscreen monitoring" : "Open fullscreen monitoring"}
                 title={fullscreen ? "Exit fullscreen" : "Fullscreen monitoring"}
+                style={{ "--nav-pill-expanded-width": fullscreen ? "136px" : "112px" } as React.CSSProperties}
                 onClick={() => void toggleFullscreen()}
               >
                 {fullscreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}

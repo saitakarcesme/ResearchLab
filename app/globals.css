@@ -153,6 +153,7 @@ a {
 
 .nav-pill {
   --neon-angle: 0deg;
+  --nav-pill-expanded-width: 112px;
   position: relative;
   isolation: isolate;
   display: inline-flex;
@@ -165,15 +166,15 @@ a {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 999px;
-  background: rgba(18, 18, 18, 0.58);
+  background: rgba(18, 18, 18, 0.9);
   box-shadow: 0 9px 28px rgba(0, 0, 0, 0.2), 0 0 16px rgba(124, 124, 124, 0.08), inset 0 1px rgba(255, 255, 255, 0.035);
   color: #b8b8b8;
   font-size: 12px;
   font-weight: 580;
   letter-spacing: -0.01em;
   white-space: nowrap;
-  backdrop-filter: blur(18px) saturate(115%);
-  transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1), color 180ms ease, background 180ms ease, border-color 180ms ease, transform 220ms ease, box-shadow 220ms ease;
+  will-change: width;
+  transition: width 380ms cubic-bezier(0.16, 1, 0.3, 1), color 220ms ease, background 260ms ease, border-color 260ms ease, box-shadow 320ms ease;
 }
 
 .nav-pill > svg {
@@ -181,11 +182,11 @@ a {
 }
 
 .nav-pill > span {
-  max-width: 0;
+  max-width: 120px;
   overflow: hidden;
   opacity: 0;
-  transform: translateX(-5px);
-  transition: max-width 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 150ms ease 25ms, transform 220ms ease;
+  transform: translate3d(-4px, 0, 0);
+  transition: opacity 150ms ease, transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .nav-pill::before,
@@ -220,24 +221,27 @@ a {
 
 .nav-pill:hover,
 .nav-pill:focus-visible {
-  width: 154px;
+  width: var(--nav-pill-expanded-width);
   border-color: rgba(169, 169, 169, 0.16);
   background: rgba(29, 29, 29, 0.78);
   color: #b8b8b8;
-  transform: translateX(2px);
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26), 0 0 22px rgba(148, 148, 148, 0.13), inset 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .nav-pill:hover > span,
 .nav-pill:focus-visible > span {
-  max-width: 104px;
   opacity: 1;
   transform: translateX(0);
+  transition-delay: 65ms;
 }
 
 .nav-pill:hover::before,
-.settings-trigger:hover::before,
-.fullscreen-trigger:hover::before,
+.nav-pill:focus-visible::before {
+  opacity: 1;
+  filter: drop-shadow(0 0 8px rgba(149, 149, 149, 0.72));
+  transition: opacity 220ms ease, filter 260ms ease;
+}
+
 .launch-config .launch-methods label:hover::before,
 .launch-actions .queue-button:not(:disabled):hover::before,
 .launch-actions .primary-button:not(:disabled):hover::before {
