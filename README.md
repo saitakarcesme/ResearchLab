@@ -47,7 +47,8 @@ powershell -ExecutionPolicy Bypass -File scripts/start-local.ps1 -EnableExecutio
 The launcher serves the built production client by default, which keeps long-running TV and
 WebKit sessions substantially lighter than the development server. Use `-Development` only
 for local frontend debugging. If `dist/server/index.js` is missing, the launcher builds it once
-before starting.
+before starting. Tailscale Serve keeps `/` on the production web client while routing `/api`
+and `/health` privately to the Windows backend; no public port or router forwarding is used.
 
 The command prints the private Tailscale URL to open on the Mac. The browser
 uses the Windows API through the same origin, so local-GPU work still runs on
