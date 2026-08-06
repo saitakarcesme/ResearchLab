@@ -110,46 +110,53 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <MotionConfig reducedMotion="user">
       <div className="app-shell">
         <div className="app-background" inert={settingsOpen ? true : undefined} aria-hidden={settingsOpen || undefined}>
-        <nav className="floating-nav" aria-label="Primary navigation">
-          {navigation.map((item) => {
-            const { href, label, icon: Icon } = item;
-            const active = isNavigationActive(pathname, item);
-            return (
-              <Link
-                href={href}
-                key={href}
-                className={`nav-pill ${active ? "nav-pill-active" : ""}`}
-                aria-current={active ? "page" : undefined}
-              >
-                <Icon size={16} strokeWidth={1.9} aria-hidden="true" />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <button
-          ref={settingsTriggerRef}
-          className="settings-trigger"
-          type="button"
-          aria-label="GPU source settings"
-          aria-expanded={settingsOpen}
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings size={18} strokeWidth={1.8} />
-        </button>
-
         <main ref={mainRef} className={`app-main ${fullscreen ? "app-main-fullscreen" : ""}`}>
+          <div className="floating-dock">
+            <nav className="floating-nav" aria-label="Primary navigation">
+              {navigation.map((item) => {
+                const { href, label, icon: Icon } = item;
+                const active = isNavigationActive(pathname, item);
+                return (
+                  <Link
+                    href={href}
+                    key={href}
+                    className={`nav-pill ${active ? "nav-pill-active" : ""}`}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                    <span>{label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+
+            <div className="dock-actions" role="group" aria-label="Application controls">
+              <button
+                ref={settingsTriggerRef}
+                className="nav-pill settings-trigger"
+                type="button"
+                aria-label="GPU source settings"
+                aria-expanded={settingsOpen}
+                onClick={() => setSettingsOpen(true)}
+              >
+                <Settings size={18} strokeWidth={1.8} aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+
+              <button
+                className="nav-pill fullscreen-trigger"
+                type="button"
+                aria-label={fullscreen ? "Exit fullscreen monitoring" : "Open fullscreen monitoring"}
+                title={fullscreen ? "Exit fullscreen" : "Fullscreen monitoring"}
+                onClick={() => void toggleFullscreen()}
+              >
+                {fullscreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}
+                <span>{fullscreen ? "Exit fullscreen" : "Fullscreen"}</span>
+              </button>
+            </div>
+          </div>
+
           {children}
-          <button
-            className="fullscreen-trigger"
-            type="button"
-            aria-label={fullscreen ? "Exit fullscreen monitoring" : "Open fullscreen monitoring"}
-            title={fullscreen ? "Exit fullscreen" : "Fullscreen monitoring"}
-            onClick={() => void toggleFullscreen()}
-          >
-            {fullscreen ? <Minimize2 size={17} aria-hidden="true" /> : <Maximize2 size={17} aria-hidden="true" />}
-          </button>
         </main>
         </div>
 
