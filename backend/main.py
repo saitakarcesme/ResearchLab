@@ -650,9 +650,15 @@ def create_app(
             raise _control_error(exc) from exc
 
     @app.get("/api/researches/{research_id}")
-    def get_research(research_id: str, request: Request) -> dict[str, Any]:
+    def get_research(
+        research_id: str,
+        request: Request,
+        history: bool = Query(default=True),
+    ) -> dict[str, Any]:
         database = _database(request)
-        research = database.get_research(research_id, detail=True)
+        research = database.get_research_snapshot(
+            research_id, include_history=history
+        )
         if research is None:
             raise _not_found("Research")
         research["gpu_source"] = database.get_gpu_source(research["gpu_source_id"])
@@ -731,11 +737,18 @@ def create_app(
             raise _control_error(exc) from exc
 
     @app.get("/api/researches/{research_id}/experiments")
-    def list_experiments(research_id: str, request: Request) -> list[dict[str, Any]]:
+    def list_experiments(
+        research_id: str,
+        request: Request,
+        after_number: int = Query(default=0, ge=0),
+        limit: int = Query(default=80, ge=1, le=300),
+    ) -> list[dict[str, Any]]:
         database = _database(request)
         if database.get_research(research_id) is None:
             raise _not_found("Research")
-        return database.list_experiments(research_id)
+        return database.list_experiments_after(
+            research_id, after_number=after_number, limit=limit
+        )
 
     @app.get("/api/researches/{research_id}/logs")
     def list_logs(
@@ -754,14 +767,15 @@ def create_app(
         research_id: str,
         request: Request,
         last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+        after_id: int = Query(default=0, ge=0),
     ) -> StreamingResponse:
         database = _database(request)
         if database.get_research(research_id) is None:
             raise _not_found("Research")
         try:
-            cursor = max(0, int(last_event_id or 0))
+            cursor = max(after_id, int(last_event_id or 0))
         except ValueError:
-            cursor = 0
+            cursor = after_id
 
         async def stream() -> AsyncIterator[str]:
             nonlocal cursor
@@ -775,7 +789,9 @@ def create_app(
                     for event in events:
                         cursor = int(event["id"])
                         payload = json.dumps(
-                            event, ensure_ascii=False, separators=(",", ":")
+                            database.compact_log(event),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
                         )
                         yield f"id: {cursor}\ndata: {payload}\n\n"
                 else:

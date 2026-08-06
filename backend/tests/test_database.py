@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from backend.db import Database
 
 
@@ -176,3 +178,54 @@ def test_detail_returns_the_newest_200_logs_in_chronological_order(settings) -> 
     assert len(logs) == 200
     assert logs[0]["message"] == "log-5"
     assert logs[-1]["message"] == "log-204"
+
+
+def test_live_snapshot_is_bounded_compact_and_keeps_database_history(settings) -> None:
+    database = Database(settings.database_path)
+    database.initialize()
+    source = database.ensure_local_gpu_source("Local GPU")
+    research = database.create_research(
+        {
+            "title": "Long research",
+            "original_prompt": "run all night",
+            "objective": "Keep the live monitor bounded",
+            "gpu_source_id": source["id"],
+            "target_gpu_allocation": 100,
+        }
+    )
+    for number in range(1, 221):
+        experiment = database.create_experiment(
+            research["id"], f"hypothesis-{number}-" + "h" * 400, "c" * 400, None
+        )
+        database.finish_experiment(
+            experiment["id"],
+            metric_value=float(number),
+            accepted=number % 10 == 0,
+            git_commit=None,
+        )
+        database.add_log(
+            research["id"],
+            "experiment_completed",
+            "m" * 900,
+            experiment_id=experiment["id"],
+            data={"experiment_number": number, "metric_value": number, "large": "x" * 5000},
+        )
+
+    snapshot = database.get_research_snapshot(research["id"])
+    assert snapshot is not None
+    assert snapshot["experiment_count"] == 220
+    assert snapshot["accepted_experiment_count"] == 22
+    assert snapshot["rejected_experiment_count"] == 198
+    assert len(snapshot["experiments"]) == 100
+    assert snapshot["experiments"][0]["experiment_number"] == 121
+    assert len(snapshot["experiments"][0]["hypothesis"]) == 180
+    assert len(snapshot["logs"]) == 40
+    assert len(snapshot["logs"][0]["message"]) == 300
+    assert "large" not in (snapshot["logs"][0]["data"] or {})
+    assert len(json.dumps(snapshot, separators=(",", ":"))) < 100_000
+    assert len(database.list_experiments(research["id"])) == 220
+
+    delta = database.list_experiments_after(
+        research["id"], after_number=218, limit=10
+    )
+    assert [item["experiment_number"] for item in delta] == [219, 220]

@@ -7,6 +7,7 @@ import type {
   CloudRentalOrder,
   GpuSource,
   GpuTelemetry,
+  Experiment,
   LocalModelCatalog,
   Research,
   ResearcherModelCatalog,
@@ -127,8 +128,25 @@ export function listResearcherModels(): Promise<ResearcherModelCatalog> {
   return request("/api/researcher-models");
 }
 
-export async function getResearch(id: string): Promise<Research> {
-  return normalizeResearch(await request<ResearchPayload>(`/api/researches/${encodeURIComponent(id)}`));
+export async function getResearch(id: string, options?: { history?: boolean; signal?: AbortSignal }): Promise<Research> {
+  const history = options?.history === false ? "?history=false" : "";
+  return normalizeResearch(await request<ResearchPayload>(`/api/researches/${encodeURIComponent(id)}${history}`, {
+    signal: options?.signal,
+  }));
+}
+
+export function listResearchExperiments(
+  id: string,
+  afterNumber: number,
+  options?: { signal?: AbortSignal },
+): Promise<Experiment[]> {
+  const query = new URLSearchParams({
+    after_number: String(Math.max(0, afterNumber)),
+    limit: "80",
+  });
+  return request(`/api/researches/${encodeURIComponent(id)}/experiments?${query}`, {
+    signal: options?.signal,
+  });
 }
 
 export function deleteResearch(id: string): Promise<void> {
@@ -273,6 +291,15 @@ export function getArticle(identifier: string): Promise<Article> {
   return request(`/api/articles/${encodeURIComponent(identifier)}`);
 }
 
-export function researchEventsUrl(id: string): string {
-  return `${API_BASE}/api/researches/${encodeURIComponent(id)}/events`;
+export function researchEventsUrl(id: string, afterId = 0): string {
+  const query = new URLSearchParams({ after_id: String(Math.max(0, afterId)) });
+  return `${API_BASE}/api/researches/${encodeURIComponent(id)}/events?${query}`;
+}
+
+export function telemetryEventsUrl(sourceId: string): string {
+  return `${API_BASE}/api/telemetry/stream?source_id=${encodeURIComponent(sourceId)}`;
+}
+
+export function normalizeTelemetryEvent(value: unknown): GpuTelemetry {
+  return normalizeTelemetry(value as TelemetryPayload);
 }

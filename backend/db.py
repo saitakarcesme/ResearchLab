@@ -859,6 +859,10 @@ class Database:
         return """
             SELECT r.*, g.name AS gpu_name, g.type AS gpu_type,
                    COUNT(DISTINCT e.id) AS experiment_count,
+                   COALESCE(SUM(CASE WHEN e.accepted = 1 THEN 1 ELSE 0 END), 0)
+                             AS accepted_experiment_count,
+                   COALESCE(SUM(CASE WHEN e.accepted = 0 THEN 1 ELSE 0 END), 0)
+                             AS rejected_experiment_count,
                    COALESCE(SUM(e.token_count), 0) AS training_tokens,
                    COALESCE((SELECT SUM(u.input_tokens) FROM research_token_usage u
                              WHERE u.research_id = r.id), 0) AS input_tokens,
@@ -994,6 +998,84 @@ class Database:
         if record is not None and detail:
             record["experiments"] = self.list_experiments(research_id)
             record["logs"] = self.list_recent_logs(research_id, limit=200)
+        return record
+
+    @staticmethod
+    def _compact_experiment(experiment: Mapping[str, Any]) -> dict[str, Any]:
+        """Return only the bounded fields needed by the live monitor."""
+
+        return {
+            "id": experiment.get("id"),
+            "research_id": experiment.get("research_id"),
+            "experiment_number": experiment.get("experiment_number"),
+            "hypothesis": str(experiment.get("hypothesis") or "")[:180],
+            "change_summary": str(experiment.get("change_summary") or "")[:180],
+            "metric_value": experiment.get("metric_value"),
+            "previous_best": experiment.get("previous_best"),
+            "accepted": experiment.get("accepted"),
+            "started_at": experiment.get("started_at"),
+            "completed_at": experiment.get("completed_at"),
+            "git_commit": experiment.get("git_commit"),
+            "error": str(experiment.get("error") or "")[:180] or None,
+            "token_count": experiment.get("token_count", 0),
+        }
+
+    @staticmethod
+    def compact_log(log: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep live activity useful without shipping large benchmark payloads."""
+
+        allowed_data = {
+            "experiment_number",
+            "metric_value",
+            "training_seconds",
+            "total_seconds",
+            "retry_delay_seconds",
+            "researcher_model_id",
+            "model_id",
+        }
+        data = log.get("data")
+        compact_data = (
+            {key: data[key] for key in allowed_data if key in data}
+            if isinstance(data, Mapping)
+            else None
+        )
+        return {
+            "id": log.get("id"),
+            "research_id": log.get("research_id"),
+            "experiment_id": log.get("experiment_id"),
+            "level": log.get("level"),
+            "event_type": log.get("event_type"),
+            "message": str(log.get("message") or "")[:300],
+            "data": compact_data or None,
+            "created_at": log.get("created_at"),
+        }
+
+    def get_research_snapshot(
+        self,
+        research_id: str,
+        *,
+        include_history: bool = True,
+        experiment_limit: int = 100,
+        log_limit: int = 40,
+    ) -> dict[str, Any] | None:
+        """Return a memory-safe UI snapshot while the full record stays in SQLite."""
+
+        record = self.get_research(research_id, detail=False)
+        if record is None:
+            return None
+        if include_history:
+            record["experiments"] = [
+                self._compact_experiment(item)
+                for item in self.list_recent_experiments(
+                    research_id, limit=max(1, min(experiment_limit, 300))
+                )
+            ]
+            record["logs"] = [
+                self.compact_log(item)
+                for item in self.list_recent_logs(
+                    research_id, limit=max(1, min(log_limit, 100))
+                )
+            ]
         return record
 
     def update_research(
@@ -1263,6 +1345,31 @@ class Database:
                 (research_id,),
             ).fetchall()
         return [self._record(row) or {} for row in rows]
+
+    def list_recent_experiments(
+        self, research_id: str, *, limit: int = 160
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM (
+                       SELECT * FROM experiments WHERE research_id = ?
+                       ORDER BY experiment_number DESC LIMIT ?
+                   ) ORDER BY experiment_number ASC""",
+                (research_id, limit),
+            ).fetchall()
+        return [self._record(row) or {} for row in rows]
+
+    def list_experiments_after(
+        self, research_id: str, *, after_number: int = 0, limit: int = 80
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM experiments
+                   WHERE research_id = ? AND experiment_number > ?
+                   ORDER BY experiment_number ASC LIMIT ?""",
+                (research_id, after_number, limit),
+            ).fetchall()
+        return [self._compact_experiment(self._record(row) or {}) for row in rows]
 
     def add_log(
         self,

@@ -4,19 +4,22 @@ import { AnimatePresence, motion } from "framer-motion";
 import { BookOpen, ListX, LoaderCircle, Pause, Play, Square, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   controlResearch,
   createArticle,
   deleteResearch,
   getGpuTelemetry,
   getResearch,
+  listResearchExperiments,
+  normalizeTelemetryEvent,
   researchEventsUrl,
+  telemetryEventsUrl,
 } from "@/lib/api";
 import { articlePath } from "@/lib/article-url";
 import { formatMetric, formatTokenCount, metricDescription, metricLabel } from "@/lib/format";
 import { modelDisplayName } from "@/lib/model-label";
-import type { Article, GpuTelemetry, Research } from "@/lib/types";
+import type { Article, Experiment, GpuTelemetry, Research, ResearchLog } from "@/lib/types";
 import { GpuPerformance } from "./gpu-performance";
 import { LiveLogs } from "./live-logs";
 import { ProgressChart } from "./progress-chart";
@@ -32,12 +35,33 @@ function tokenBreakdown(research: Research): string {
   return `${exactTokens(research.input_tokens)} input${cached ? ` (${exactTokens(cached)} cached)` : ""} · ${exactTokens(research.output_tokens)} output`;
 }
 
+const MAX_LIVE_EXPERIMENTS = 160;
+const MAX_LIVE_LOGS = 60;
+
+function mergeExperiments(current: Experiment[], incoming: Experiment[]): Experiment[] {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) merged.set(item.id, item);
+  return [...merged.values()]
+    .sort((a, b) => a.experiment_number - b.experiment_number)
+    .slice(-MAX_LIVE_EXPERIMENTS);
+}
+
+function mergeLogs(current: ResearchLog[], incoming: ResearchLog[]): ResearchLog[] {
+  const merged = new Map(current.map((item) => [String(item.id), item]));
+  for (const item of incoming) merged.set(String(item.id), item);
+  return [...merged.values()]
+    .sort((a, b) => Number(a.id) - Number(b.id))
+    .slice(-MAX_LIVE_LOGS);
+}
+
 export function ResearchLiveView({
   researchId,
   initialResearch,
+  monitorMode = false,
 }: {
   researchId: string;
   initialResearch?: Research | null;
+  monitorMode?: boolean;
 }) {
   const router = useRouter();
   const [research, setResearch] = useState<Research | null>(initialResearch ?? null);
@@ -47,102 +71,169 @@ export function ResearchLiveView({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const refreshing = useRef(false);
+  const researchRef = useRef<Research | null>(initialResearch ?? null);
+  const refreshController = useRef<AbortController | null>(null);
+  const eventRefreshTimer = useRef<number | null>(null);
+  const sseConnected = useRef(false);
   const deleting = useRef(false);
   const deleteTriggerRef = useRef<HTMLButtonElement>(null);
   const deleteDialogRef = useRef<HTMLElement>(null);
 
-  const refresh = useCallback(async () => {
-    if (refreshing.current) return;
-    refreshing.current = true;
+  const [pageVisible, setPageVisible] = useState(true);
+  const [historyReady, setHistoryReady] = useState(Boolean(initialResearch?.logs));
+  const nativePageVisible = useRef(true);
+
+  useEffect(() => {
+    researchRef.current = research;
+  }, [research]);
+
+  useEffect(() => {
+    const updateVisibility = () => setPageVisible(
+      document.visibilityState === "visible" && nativePageVisible.current,
+    );
+    const updateNativeVisibility = (event: Event) => {
+      nativePageVisible.current = (event as CustomEvent<boolean>).detail !== false;
+      updateVisibility();
+    };
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    window.addEventListener("researchlab-visibility", updateNativeVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", updateVisibility);
+      window.removeEventListener("researchlab-visibility", updateNativeVisibility);
+    };
+  }, []);
+
+  const refresh = useCallback(async (history = false) => {
+    refreshController.current?.abort();
+    const controller = new AbortController();
+    refreshController.current = controller;
     try {
-      setResearch(await getResearch(researchId));
+      const next = await getResearch(researchId, { history, signal: controller.signal });
+      setResearch((current) => ({
+        ...next,
+        experiments: next.experiments ?? current?.experiments ?? [],
+        logs: next.logs ?? current?.logs ?? [],
+      }));
+      if (history) setHistoryReady(true);
       setError(null);
     } catch (nextError) {
+      if (controller.signal.aborted) return;
       setError(nextError instanceof Error ? nextError.message : "Research data is unavailable.");
-    } finally {
-      refreshing.current = false;
     }
   }, [researchId]);
 
   useEffect(() => {
-    const initial = window.setTimeout(() => void refresh(), 0);
-    const interval = window.setInterval(() => void refresh(), 1500);
+    if (!pageVisible) return;
+    const initial = window.setTimeout(() => void refresh(true), 0);
+    const interval = window.setInterval(() => {
+      if (!sseConnected.current) void refresh(!historyReady);
+    }, 30_000);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
+      refreshController.current?.abort();
     };
-  }, [refresh]);
+  }, [historyReady, pageVisible, refresh]);
 
   useEffect(() => {
-    const events = new EventSource(researchEventsUrl(researchId));
-    const handleEvent = () => void refresh();
-    events.onmessage = handleEvent;
-    [
-      "research_created",
-      "researcher_model_selected",
-      "research_queued",
-      "research_dequeued",
-      "research_started",
-      "research_start_failed",
-      "research_ready",
-      "research_paused",
-      "research_resumed",
-      "research_stopped",
-      "research_failed",
-      "research_completed",
-      "model_selected",
-      "model_verified",
-      "model_warmed",
-      "model_unload_warning",
-      "local_researcher_released",
-      "environment_started",
-      "environment_ready",
-      "gpu_profile_applied",
-      "research_brief_generated",
-      "research_brief_fallback",
-      "agent_started",
-      "agent_error",
-      "gpu_evaluation_started",
-      "experiment_started",
-      "experiment_recovered",
-      "change_applied",
-      "oom_retry",
-      "experiment_error",
-      "experiment_completed",
-      "experiment_accepted",
-      "experiment_rejected",
-      "best_ref_warning",
-      "article_generated",
-      "service_restarted",
-      "service_shutdown",
-      "iteration_error",
-      "research_control_error",
-      "stale_process_cleanup",
-      "stale_process_warning",
-    ].forEach((name) =>
-      events.addEventListener(name, handleEvent),
-    );
-    return () => events.close();
-  }, [refresh, researchId]);
-
-  useEffect(() => {
-    let mounted = true;
-    async function sample() {
+    if (!pageVisible || !historyReady) return;
+    const lastLogId = Number(researchRef.current?.logs?.at(-1)?.id ?? 0);
+    const events = new EventSource(researchEventsUrl(researchId, lastLogId));
+    let disposed = false;
+    let syncController: AbortController | null = null;
+    const syncChanges = async () => {
+      eventRefreshTimer.current = null;
+      const snapshot = researchRef.current;
+      const lastNumber = snapshot?.experiments?.at(-1)?.experiment_number ?? 0;
+      syncController?.abort();
+      const controller = new AbortController();
+      syncController = controller;
       try {
-        const next = await getGpuTelemetry(research?.gpu_source_id);
-        if (mounted) setTelemetry(next);
-      } catch {
-        if (mounted) setTelemetry(null);
+        const [summary, experiments] = await Promise.all([
+          getResearch(researchId, { history: false, signal: controller.signal }),
+          listResearchExperiments(researchId, Math.max(0, lastNumber - 1), { signal: controller.signal }),
+        ]);
+        if (disposed) return;
+        setResearch((current) => ({
+          ...summary,
+          experiments: mergeExperiments(current?.experiments ?? [], experiments),
+          logs: current?.logs ?? [],
+        }));
+        setError(null);
+      } catch (nextError) {
+        if (controller.signal.aborted || disposed) return;
+        setError(nextError instanceof Error ? nextError.message : "Live research update failed.");
       }
-    }
-    void sample();
-    const interval = window.setInterval(() => void sample(), 2200);
-    return () => {
-      mounted = false;
-      window.clearInterval(interval);
     };
-  }, [research?.gpu_source_id]);
+    const scheduleSync = () => {
+      if (eventRefreshTimer.current != null) return;
+      eventRefreshTimer.current = window.setTimeout(() => void syncChanges(), 500);
+    };
+    events.onopen = () => {
+      sseConnected.current = true;
+      setError(null);
+    };
+    events.onerror = () => {
+      sseConnected.current = false;
+    };
+    events.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data) as ResearchLog;
+        setResearch((current) => current ? {
+          ...current,
+          logs: mergeLogs(current.logs ?? [], [log]),
+        } : current);
+      } catch {
+        // A summary refresh below still reconciles malformed or future event shapes.
+      }
+      scheduleSync();
+    };
+    return () => {
+      disposed = true;
+      syncController?.abort();
+      sseConnected.current = false;
+      events.close();
+      if (eventRefreshTimer.current != null) {
+        window.clearTimeout(eventRefreshTimer.current);
+        eventRefreshTimer.current = null;
+      }
+    };
+  }, [historyReady, pageVisible, researchId]);
+
+  useEffect(() => {
+    const sourceId = research?.gpu_source_id;
+    if (!pageVisible || !sourceId) return;
+    const events = new EventSource(telemetryEventsUrl(sourceId));
+    let fallbackRequested = false;
+    events.onopen = () => {
+      fallbackRequested = false;
+    };
+    events.onmessage = (event) => {
+      try {
+        setTelemetry(normalizeTelemetryEvent(JSON.parse(event.data)));
+      } catch {
+        // Retain the last good sample across a transient malformed event.
+      }
+    };
+    events.onerror = () => {
+      if (fallbackRequested) return;
+      fallbackRequested = true;
+      void getGpuTelemetry(sourceId).then(setTelemetry).catch(() => undefined);
+    };
+    return () => {
+      events.close();
+    };
+  }, [pageVisible, research?.gpu_source_id]);
+
+  const visibleExperiments = useMemo(
+    () => (research?.experiments ?? []).slice(monitorMode ? -120 : -MAX_LIVE_EXPERIMENTS),
+    [monitorMode, research?.experiments],
+  );
+  const visibleLogs = useMemo(
+    () => (research?.logs ?? []).slice(monitorMode ? -40 : -MAX_LIVE_LOGS),
+    [monitorMode, research?.logs],
+  );
 
   useEffect(() => {
     if (!deleteOpen) return;
@@ -194,7 +285,7 @@ export function ResearchLiveView({
     setError(null);
     try {
       await controlResearch(researchId, action);
-      await refresh();
+      await refresh(true);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : `Could not ${action} research.`);
     } finally {
@@ -258,7 +349,7 @@ export function ResearchLiveView({
 
   return (
     <motion.div
-      className="research-live"
+      className={`research-live ${monitorMode ? "research-monitor-mode" : ""}`}
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32, ease: "easeOut" }}
@@ -386,14 +477,16 @@ export function ResearchLiveView({
 
       <div className="research-grid">
         <ProgressChart
-          experiments={research.experiments ?? []}
+          experiments={visibleExperiments}
           metricName={research.metric_name}
           direction={research.metric_direction}
           baseline={research.baseline_value}
+          acceptedCount={research.accepted_experiment_count}
+          rejectedCount={research.rejected_experiment_count}
         />
         <GpuPerformance telemetry={telemetry} target={research.target_gpu_allocation} phase={gpuPhase} />
       </div>
-      <LiveLogs logs={research.logs ?? []} status={research.status} metricName={research.metric_name} />
+      <LiveLogs logs={visibleLogs} status={research.status} metricName={research.metric_name} />
       </div>
 
       <AnimatePresence>

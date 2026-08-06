@@ -68,7 +68,7 @@ export function GpuPerformance({
                   <stop offset="100%" stopColor="#d8d8d8" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <Area type="monotone" dataKey="value" stroke="#f2f2f2" strokeWidth={2} fill="url(#gpuCardFill)" dot={false} isAnimationActive animationDuration={400} />
+              <Area type="monotone" dataKey="value" stroke="#f2f2f2" strokeWidth={2} fill="url(#gpuCardFill)" dot={false} isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
         ) : <div className="quiet-sparkline" />}

@@ -73,11 +73,20 @@ export function LabView() {
   }, []);
 
   useEffect(() => {
+    let timer: number | null = null;
+    const schedule = () => {
+      if (timer != null) window.clearInterval(timer);
+      timer = document.visibilityState === "visible"
+        ? window.setInterval(() => void load(), 10_000)
+        : null;
+    };
     const initial = window.setTimeout(() => void load(), 0);
-    const timer = window.setInterval(() => void load(), 2000);
+    schedule();
+    document.addEventListener("visibilitychange", schedule);
     return () => {
       window.clearTimeout(initial);
-      window.clearInterval(timer);
+      if (timer != null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", schedule);
     };
   }, [load]);
 
@@ -109,6 +118,7 @@ export function LabView() {
   useEffect(() => {
     let mounted = true;
     async function sample() {
+      if (document.visibilityState !== "visible") return;
       try {
         const next = await getGpuTelemetry(selectedSource || null);
         if (mounted) setTelemetry(next);
@@ -495,7 +505,7 @@ export function LabView() {
 
       {fullscreen && monitorResearch ? (
         <div className="lab-fullscreen-monitor">
-          <ResearchLiveView researchId={monitorResearch.id} initialResearch={monitorResearch} />
+          <ResearchLiveView researchId={monitorResearch.id} initialResearch={monitorResearch} monitorMode />
         </div>
       ) : null}
     </div>

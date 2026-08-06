@@ -1,6 +1,7 @@
 param(
     [switch]$EnableExecution,
     [switch]$EnableTailnetAccess,
+    [switch]$Development,
     [string]$WslDistro = "Ubuntu-24.04"
 )
 
@@ -35,7 +36,20 @@ try {
         Write-Host "Private Mac access is enabled through Tailscale Serve."
         & $tailscale.Source serve status
     }
-    npm run dev
+    if ($Development) {
+        npm run dev
+    }
+    else {
+        $productionEntry = Join-Path $projectRoot "dist\server\index.js"
+        if (-not (Test-Path -LiteralPath $productionEntry)) {
+            Write-Host "Building the ResearchLab web client for production."
+            npm run build
+            if ($LASTEXITCODE -ne 0) {
+                throw "ResearchLab production build failed with exit code $LASTEXITCODE."
+            }
+        }
+        npm run start
+    }
 }
 finally {
     if ($backendProcess -and -not $backendProcess.HasExited) {

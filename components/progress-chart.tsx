@@ -23,12 +23,33 @@ interface ChartPoint {
   summary: string;
 }
 
+const MAX_CHART_POINTS = 280;
+
+function downsamplePoints(points: ChartPoint[]): ChartPoint[] {
+  if (points.length <= MAX_CHART_POINTS) return points;
+  const required = new Set<number>([0, points.length - 1]);
+  points.forEach((point, index) => {
+    if (point.accepted) required.add(index);
+  });
+  const remaining = Math.max(0, MAX_CHART_POINTS - required.size);
+  if (remaining) {
+    const step = (points.length - 1) / remaining;
+    for (let index = 0; index < remaining; index += 1) {
+      required.add(Math.min(points.length - 1, Math.round(index * step)));
+    }
+  }
+  return [...required]
+    .sort((a, b) => a - b)
+    .slice(0, MAX_CHART_POINTS)
+    .map((index) => points[index]);
+}
+
 function buildPoints(
   experiments: Experiment[],
   baseline: number | null,
 ): ChartPoint[] {
   let runningBest: number | null = baseline;
-  return experiments
+  const points = experiments
     .filter((experiment) => experiment.metric_value != null)
     .sort((a, b) => a.experiment_number - b.experiment_number)
     .map((experiment) => {
@@ -44,6 +65,7 @@ function buildPoints(
         summary: experiment.change_summary || experiment.hypothesis,
       };
     });
+  return downsamplePoints(points);
 }
 
 function ExperimentDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartPoint }) {
@@ -65,11 +87,15 @@ function ProgressChartComponent({
   metricName,
   direction,
   baseline,
+  acceptedCount,
+  rejectedCount,
 }: {
   experiments: Experiment[];
   metricName: string;
   direction: MetricDirection;
   baseline: number | null;
+  acceptedCount?: number;
+  rejectedCount?: number;
 }) {
   const points = useMemo(
     () => buildPoints(experiments, baseline),
@@ -83,6 +109,8 @@ function ProgressChartComponent({
     [experiments],
   );
   const displayMetric = metricLabel(metricName);
+  const animate = points.length <= 80;
+  const showDots = points.length <= 120;
 
   return (
     <section className="surface-card progress-card" aria-labelledby="progress-title">
@@ -139,15 +167,15 @@ function ProgressChartComponent({
                   formatter={(value, name) => [formatMetric(Number(value)), name === "best" ? "Best so far" : displayMetric]}
                   labelFormatter={(value) => `Experiment ${value}`}
                 />
-                <Area type="monotone" dataKey="metric" fill="url(#progressFill)" stroke="none" />
+                <Area type="monotone" dataKey="metric" fill="url(#progressFill)" stroke="none" isAnimationActive={animate} />
                 <Line
                   type="monotone"
                   dataKey="metric"
                   stroke="#eeeeee"
                   strokeWidth={2.2}
-                  dot={<ExperimentDot />}
-                  activeDot={{ r: 6, fill: "#ffffff", stroke: "#ffffff", strokeWidth: 1.5 }}
-                  isAnimationActive
+                  dot={showDots ? <ExperimentDot /> : false}
+                  activeDot={showDots ? { r: 6, fill: "#ffffff", stroke: "#ffffff", strokeWidth: 1.5 } : false}
+                  isAnimationActive={animate}
                   animationDuration={450}
                 />
                 <Line
@@ -157,7 +185,7 @@ function ProgressChartComponent({
                   strokeWidth={1.8}
                   strokeDasharray="5 5"
                   dot={false}
-                  isAnimationActive
+                  isAnimationActive={animate}
                   animationDuration={450}
                 />
               </ComposedChart>
@@ -183,8 +211,8 @@ function ProgressChartComponent({
       )}
 
       <div className="experiment-counts">
-        <span><Check size={13} /> {experiments.filter((item) => item.accepted).length} accepted</span>
-        <span><X size={13} /> {experiments.filter((item) => item.accepted === false).length} rejected</span>
+        <span><Check size={13} /> {acceptedCount ?? experiments.filter((item) => item.accepted).length} accepted</span>
+        <span><X size={13} /> {rejectedCount ?? experiments.filter((item) => item.accepted === false).length} rejected</span>
       </div>
     </section>
   );

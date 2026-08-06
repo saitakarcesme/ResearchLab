@@ -68,6 +68,8 @@ export interface Research {
   created_at: string;
   updated_at: string;
   experiment_count?: number;
+  accepted_experiment_count?: number;
+  rejected_experiment_count?: number;
   total_tokens?: number;
   input_tokens?: number;
   cached_input_tokens?: number;
